@@ -1,6 +1,8 @@
 // Câmeras pesquisadas para o projeto (preços consultados em 02/10/2026).
 // `estimated` lista os campos que não vieram de datasheet e devem ser conferidos.
 // hfov e focalMm: um valor = lente fixa; dois valores = zoom motorizado [grande angular, tele].
+// sensorType: formato óptico do datasheet (1/x"), de onde sai o tamanho do pixel; null = calculado pela lente.
+// O comportamento do pixel (sensibilidade, saturação, ruído) vem do Sony IMX327: ver src/core/sensor.js.
 
 export const CAMERAS = [
   {
@@ -11,6 +13,7 @@ export const CAMERAS = [
     widthPx: 1920, heightPx: 1080,
     hfov: [70.4], focalMm: [3.67], aperture: 2.0,
     distortionK: -0.05,
+    sensorType: null, // sensor não divulgado: pixel calculado pela lente (focal e FOV)
     price: null, store: 'Protótipo de bancada',
     notes: 'Webcam para desenvolver o algoritmo. Controles manuais via UVC.',
     estimated: ['hfov', 'focalMm', 'aperture'],
@@ -23,6 +26,7 @@ export const CAMERAS = [
     widthPx: 1920, heightPx: 1080,
     hfov: [94], focalMm: [2.8], aperture: 2.0,
     distortionK: -0.22,
+    sensorType: 2.7,
     price: 289, store: 'Kabum (PIX)',
     notes: 'A mais barata. Grande angular: pega muito fundo e distorce nas bordas.',
     estimated: ['aperture'],
@@ -35,6 +39,7 @@ export const CAMERAS = [
     widthPx: 1920, heightPx: 1080,
     hfov: [82], focalMm: [4], aperture: 2.0,
     distortionK: -0.14,
+    sensorType: 2.7,
     price: 379, store: 'Amazon (preço da versão 2,8 mm)',
     notes: 'Linha de entrada com lente de 4 mm. Confirmar preço da versão 4 mm.',
     estimated: ['hfov', 'aperture'],
@@ -47,6 +52,7 @@ export const CAMERAS = [
     widthPx: 1920, heightPx: 1080,
     hfov: [85], focalMm: [4], aperture: 1.0,
     distortionK: -0.14,
+    sensorType: 2.8,
     price: 411.25, store: 'Amazon',
     notes: 'Lente 4 mm F1.0. Tem LED branco automático: deixar desligado.',
     estimated: ['hfov'],
@@ -59,6 +65,7 @@ export const CAMERAS = [
     widthPx: 1920, heightPx: 1080,
     hfov: [105, 33], focalMm: [2.8, 12], aperture: 1.4,
     distortionK: -0.2,
+    sensorType: 2.7,
     price: 1196.9, store: 'Amazon',
     notes: 'Motorizada mais barata encontrada. Datasheet cita só balanço de branco automático.',
     estimated: ['aperture'],
@@ -71,6 +78,7 @@ export const CAMERAS = [
     widthPx: 3200, heightPx: 1800,
     hfov: [103, 29], focalMm: [2.7, 13.5], aperture: 1.6,
     distortionK: -0.2,
+    sensorType: null, // formato não confirmado: pixel calculado pela lente
     price: 1265.58, store: 'Amazon',
     notes: 'Melhor custo-benefício entre as motorizadas. Confirmar se pede PoE+.',
     estimated: ['widthPx', 'heightPx', 'hfov', 'aperture'],
@@ -83,6 +91,7 @@ export const CAMERAS = [
     widthPx: 2688, heightPx: 1520,
     hfov: [105.4, 34.3], focalMm: [2.8, 12], aperture: 1.6,
     distortionK: -0.2,
+    sensorType: 3,
     price: 2314.99, store: 'Amazon',
     notes: 'Modelo discutido originalmente. O mais caro da lista.',
     estimated: ['aperture', 'hfov'],
@@ -99,8 +108,9 @@ export function customCamera(base = {}) {
     widthPx: 1920, heightPx: 1080,
     hfov: [80], focalMm: [4], aperture: 2.0,
     distortionK: -0.1,
+    sensorType: 2.8,
     price: null, store: '',
-    notes: 'Preencha resolução, FOV e focal com os dados do datasheet.',
+    notes: 'Preencha resolução, FOV, focal, abertura e formato do sensor com os dados do datasheet.',
     estimated: [],
     ...base,
   };

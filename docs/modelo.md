@@ -26,8 +26,21 @@ calcula e onde ela simplifica a realidade.
 
 - Sinal linear = refletância (sRGB → linear) × iluminação × cor da luz × exposição × balanço de branco.
 - Cor da luz por temperatura (aproximação de Tanner Helland), normalizada em 6500 K.
-- Exposição relativa, por fonte: `lux/500 × (tempo × 120) × ganho × 0,9`. Não é uma calibração radiométrica.
-  Exposição automática: menor ganho possível; procura o obturador que deixa a média da imagem em 18%.
+- Exposição pela equação da câmera (`src/core/sensor.js`). Uma superfície fosca de refletância ρ sob
+  E lux entrega ao sensor `Es = ρ · E · T / (4 · N²)` lux (N = abertura, T = 0,9 de transmissão da
+  lente, estimada). O sinal é `Es · tempo / Hsat`, em fração da saturação do pixel, vezes o ganho.
+  Abrir de F2.0 para F1.0 dá 4× mais sinal.
+- `Hsat`, a exposição que satura o pixel, vem do datasheet do Sony IMX327 (Product Information
+  Ver.1.3): sensibilidade de 10741 dígitos com 706 cd/m², F5.6 e 1/30 s (≈ 0,589 lux·s no sensor) e
+  saturação de 3855 dígitos, ou seja, `Hsat ≈ 0,21 lux·s`. No ganho de 0 dB isso equivale a cerca de ISO 370.
+- Câmeras sem sensor identificado: tamanho do pixel pelo formato óptico do datasheet (diagonal ≈ 18 mm / x
+  para "1/x"") ou, sem formato, pela lente (focal e FOV). Supõe-se pixel da mesma geração do IMX327:
+  mesmo `Hsat` (mesmo brilho) e capacidade proporcional à área (pixel menor = menos elétrons = mais ruído).
+- Exposição automática: menor ganho possível; procura o obturador que deixa a média da imagem em 18%.
+- Ruído do sensor, por pixel e por canal, antes do balanço de branco: ruído de disparo (√elétrons) mais
+  ruído de leitura. Capacidade de 14 500 e⁻ e leitura de 3 e⁻ (ZWO ASI290MC, mesmo pixel STARVIS de
+  2,9 µm), escalados pela área do pixel nos outros sensores. O ganho multiplica sinal e ruído juntos:
+  clarear com ganho não melhora a relação sinal/ruído (SNR, no painel de indicadores).
 - Várias fontes ao mesmo tempo: cada uma soma seu sinal (com sua cor, queda de luz, reflexo e flicker).
 - Reflexo: mancha multiplicada pelo "brilho" do material. Lâmpada nua = ponto forte; light bar = faixa
   alongada no sentido da fita; ring light = anel; painel = mancha larga; domo = quase nada. O difusor
@@ -43,7 +56,7 @@ calcula e onde ela simplifica a realidade.
 - Flicker: lâmpada oscila a 120 Hz; cada linha da imagem integra a luz num intervalo diferente
   (obturador rolling, 1/30 s para ler o quadro). Por isso aparecem faixas e variação entre fotos quando
   o obturador não é múltiplo de 1/120 s.
-- Ruído: triangular, proporcional ao ganho. Saturação conta pixels com algum canal ≥ 1.
+- Saturação conta pixels com algum canal ≥ 1.
 - Balanço automático: "mundo cinza" (a média da imagem vira neutra). É o motivo de uma fita vermelha
   grande puxar a cor do resto.
 
@@ -65,5 +78,8 @@ calcula e onde ela simplifica a realidade.
 
 ## O que não está modelado
 
-Sombras projetadas, câmera inclinada, desfoque, aberração cromática, vinheta da lente, sensor com
-resposta espectral real, infravermelho no modo noite (o P&B é só a luminância), movimento.
+Sombras projetadas, câmera inclinada, desfoque, aberração cromática, vinheta da lente (lentes grande
+angular com distorção em barril não seguem cos⁴ e os datasheets não trazem a iluminação relativa), sensor
+com resposta espectral real (a resposta por lux é a da referência de 3200 K para todas as luzes), mosaico
+Bayer e redução de ruído da câmera (o ruído mostrado é o do sensor, antes do filtro de ruído que câmeras
+IP aplicam), corrente de escuro, infravermelho no modo noite (o P&B é só a luminância), movimento.

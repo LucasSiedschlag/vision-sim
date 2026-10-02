@@ -243,11 +243,18 @@ function cameraPanel({ store, add }) {
   const est = model.estimated?.length
     ? h('p', { class: 'note' }, h('strong', { text: 'Valores estimados: ' }), model.estimated.join(', '), '. Confira no datasheet.')
     : null;
+  const sn = cam.sensor;
+  const sensorText = `${model.sensorType > 0 ? `1/${model.sensorType}" · ` : ''}pixel ${sn.pixelUm.toFixed(2).replace('.', ',')} µm${model.sensorType > 0 ? '' : ' (pela lente)'}`;
   const info = h('div', { class: 'card' },
     h('div', { class: 'card-row' }, h('span', { text: 'Resolução' }), h('b', { text: `${model.widthPx} × ${model.heightPx}` })),
     h('div', { class: 'card-row' }, h('span', { text: 'Lente' }), h('b', { text: model.focalMm.length > 1 ? `${model.focalMm[0]}–${model.focalMm[1]} mm` : `${model.focalMm[0]} mm` })),
+    h('div', { class: 'card-row' }, h('span', { text: 'Abertura' }), h('b', { text: `F${Number(model.aperture).toFixed(1)}` })),
+    h('div', { class: 'card-row' }, h('span', { text: 'Sensor' }), h('b', { text: sensorText })),
+    h('div', { class: 'card-row' }, h('span', { text: 'Pixel' }),
+      h('b', { text: `satura com ${sn.satLuxS.toFixed(2).replace('.', ',')} lux·s · ${(sn.fullWellE / 1000).toFixed(1).replace('.', ',')} mil e⁻ · leitura ${sn.readNoiseE} e⁻` })),
     h('div', { class: 'card-row' }, h('span', { text: 'Preço' }), h('b', { text: `${brl(model.price)}${model.store ? ` · ${model.store}` : ''}` })),
-    h('p', { class: 'hint', text: model.notes }), est);
+    h('p', { class: 'hint', text: model.notes }), est,
+    h('p', { class: 'note', text: 'Sensibilidade e saturação do pixel: datasheet do Sony IMX327 (1/2.8", 2,9 µm). Capacidade e ruído de leitura: medidos no IMX290, de mesmo pixel. Outros sensores: estimados pelo tamanho do pixel.' }));
 
   const custom = C().modelId === 'custom' ? (() => {
     const cu = () => C().custom || (C().custom = {});
@@ -261,6 +268,7 @@ function cameraPanel({ store, add }) {
         add(number({ label: 'FOV horizontal', unit: '°', min: 5, max: 170, step: 0.1, get: () => cm().hfov[0], set: setC('hfov', (v) => [v]) })),
         add(number({ label: 'Focal', unit: 'mm', min: 1, max: 100, step: 0.1, get: () => cm().focalMm[0], set: setC('focalMm', (v) => [v]) })),
         add(number({ label: 'Abertura F', min: 0.8, max: 16, step: 0.1, get: () => cm().aperture, set: setC('aperture') })),
+        add(number({ label: 'Sensor 1/x"', min: 1, max: 4, step: 0.1, get: () => cm().sensorType, set: setC('sensorType') })),
         add(number({ label: 'Distorção k1', min: -0.5, max: 0.2, step: 0.01, get: () => cm().distortionK, set: setC('distortionK') }))));
   })() : null;
 
@@ -286,7 +294,7 @@ function cameraPanel({ store, add }) {
         get: () => C().exposureMode, set: (v) => up((c) => { c.exposureMode = v; }, true) })),
       C().exposureMode === 'manual' ? add(select({ id: 'cam-shutter', label: 'Obturador', options: shutterOpts, get: nearestShutter, set: (v) => up((c) => { c.shutter = Number(v); }) })) : null,
       C().exposureMode === 'manual' ? add(range({ id: 'cam-gain', label: 'Ganho', min: 0, max: 36, step: 1, get: () => C().gainDb, set: (v) => up((c) => { c.gainDb = v; }), format: (v) => `${v} dB`,
-        hint: 'Mais ganho clareia, mas aumenta o ruído.' })) : null),
+        hint: 'Mais ganho clareia sem juntar mais luz: o ruído cresce junto.' })) : null),
     section('Balanço de branco', 'Diz à câmera qual cor é "branco". Errado, a fita muda de tom.',
       add(segmented({ label: 'Modo', options: [{ value: 'auto', label: 'Automático' }, { value: 'manual-k', label: 'Temperatura' }, { value: 'manual-rgb', label: 'Manual RGB' }],
         get: () => C().wbMode, set: (v) => up((c) => { c.wbMode = v; }, true) })),

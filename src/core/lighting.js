@@ -130,18 +130,18 @@ export function lightSources(light) {
 }
 
 /**
- * Quanto a fonte contribui no tempo de exposição, relativo a 1/120 s.
- * Contínua: proporcional ao obturador. Pulsada: só dura o pulso (multiplicado pelo overdrive),
+ * Tempo de exposição efetivo da fonte (s): luz que ela entrega equivale a `lux` durante esse tempo.
+ * Contínua: o próprio obturador. Pulsada: só dura o pulso (multiplicado pelo overdrive),
  * então encurtar o obturador até o tamanho do pulso corta o ambiente sem perder o LED.
  */
 export function timeFactor(src, shutterS) {
-  if (src.strobe) return src.overdrive * Math.min(src.pulse, shutterS) * 120;
-  return shutterS * 120;
+  if (src.strobe) return src.overdrive * Math.min(src.pulse, shutterS);
+  return shutterS;
 }
 
-/** Sinal relativo que a fonte gera numa superfície branca (1 ≈ bem exposto). */
+/** Exposição (lux·s na cena) que a fonte entrega, já multiplicada pelo ganho. */
 export function sourceSignal(src, shutterS, gainDb = 0) {
-  return (src.lux / 500) * timeFactor(src, shutterS) * Math.pow(10, gainDb / 20) * 0.9;
+  return src.lux * timeFactor(src, shutterS) * Math.pow(10, gainDb / 20);
 }
 
 /** Participação de cada grupo de fonte (ambient = galpão, bench = luzes da bancada) no sinal da imagem. */
@@ -181,14 +181,6 @@ export function combinedFlicker(light, shutterS) {
     if (s.flicker > 0) acc += v * flickerRange(shutterS, s.flicker).spread;
   }
   return total ? acc / total : 0;
-}
-
-/** Exposição de referência: 500 lux, 1/120 s, 0 dB dá uma imagem bem exposta. */
-const REF = 500 * (1 / 120);
-
-/** Fator multiplicativo de exposição (sinal linear relativo). */
-export function exposureFactor(lux, shutterS, gainDb) {
-  return ((lux * shutterS) / REF) * Math.pow(10, gainDb / 20) * 0.9;
 }
 
 /**

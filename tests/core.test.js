@@ -145,7 +145,7 @@ test('luz: LED pulsado + obturador curto corta o ambiente', () => {
   L.fixtures[0] = { ...L.fixtures[0], strobe: true, pulse: 1 / 1000, overdrive: 4 };
   const slow = lightMix(L, 1 / 120).shares.bench, fast = lightMix(L, 1 / 1000).shares.bench;
   assert.ok(fast > slow + 0.3, `${slow} → ${fast}`);
-  near(timeFactor({ strobe: true, overdrive: 4, pulse: 1 / 1000 }, 1 / 120), 0.48, 1e-9);
+  near(timeFactor({ strobe: true, overdrive: 4, pulse: 1 / 1000 }, 1 / 120), 0.004, 1e-12); // 4 × 1 ms
 });
 
 test('luz: difusor troca reflexo forte por macio e perde luz; cobertura reduz a variação do dia', () => {
@@ -158,4 +158,52 @@ test('luz: difusor troca reflexo forte por macio e perde luz; cobertura reduz a 
   assert.ok(covered < open, `${open} → ${covered}`);
   assert.ok(combinedFlicker(L, 1 / 120) < 1e-6);
   assert.ok(combinedFlicker(L, 1 / 500) > 0.01);
+});
+
+import { IMX327, SONY_REF_LUX_S, satFromSony, sensorFromFormat, sensorFor, signalFraction, noiseSigma, snrDb } from '../src/core/sensor.js';
+import { resolveCamera } from '../src/core/scene.js';
+
+test('sensor: referência da Sony (706 cd/m², F5.6, 1/30 s) dá ~0,59 lux·s no sensor', () => {
+  near(SONY_REF_LUX_S, 0.5893, 0.0005);
+  // IMX327: sensibilidade 10741 dígitos, saturação 3855 → satura com ~0,21 lux·s
+  near(IMX327.satLuxS, satFromSony(10741, 3855), 1e-12);
+  near(IMX327.satLuxS, 0.2115, 0.0005);
+});
+
+test('sensor: a referência da Sony reproduz a sensibilidade do datasheet', () => {
+  // branco de 706 cd/m² = 706·π lux na cena; F5.6; 1/30 s; sem perda na lente
+  const lux = 706 * Math.PI;
+  const frac = signalFraction({ ...IMX327 }, 5.6, lux, 1 / 30) / 0.9; // descontar a transmissão de 0,9
+  near(frac * 3855, 10741, 1);
+});
+
+test('sensor: F1.0 recebe 4× a luz de F2.0', () => {
+  near(signalFraction(IMX327, 1.0, 500, 1 / 120) / signalFraction(IMX327, 2.0, 500, 1 / 120), 4, 1e-9);
+});
+
+test('sensor: formato 1/2.8" em 1920×1080 dá pixel de ~2,9 µm (como o IMX327)', () => {
+  near(sensorFromFormat(2.8, 1920, 1080).pixelUm, 2.92, 0.03);
+  const small = sensorFromFormat(3, 2688, 1520);
+  assert.ok(small.pixelUm < 2.3 && small.fullWellE < IMX327.fullWellE, JSON.stringify(small));
+  near(small.satLuxS, IMX327.satLuxS, 1e-12); // mesmo brilho, menos elétrons
+});
+
+test('sensor: ruído de disparo — SNR cresce com o sinal e cai com o ganho', () => {
+  // saturação sem ganho: SNR ≈ √14500 ≈ 41,6 dB
+  near(snrDb(IMX327, 1, 1), 20 * Math.log10(14500 / Math.sqrt(14500 + 9)), 1e-6);
+  assert.ok(snrDb(IMX327, 0.18, 1) < snrDb(IMX327, 1, 1));
+  // mesmo brilho de saída com 24 dB de ganho = 1/16 dos elétrons → ~12 dB pior
+  const g = Math.pow(10, 24 / 20);
+  near(snrDb(IMX327, 0.18, 1) - snrDb(IMX327, 0.18, g), 12, 0.5);
+  // escuro total: só o ruído de leitura
+  near(noiseSigma(IMX327, 0, 1), 3 / 14500, 1e-12);
+});
+
+test('sensor: toda câmera da lista resolve um sensor com valores plausíveis', () => {
+  for (const cam of CAMERAS) {
+    const r = resolveCamera({ modelId: cam.id, zoom: 0, x: 0, y: 0, z: 1000 });
+    assert.ok(r.sensor.pixelUm > 1.5 && r.sensor.pixelUm < 4, `${cam.id}: ${r.sensor.pixelUm}`);
+    assert.ok(r.sensor.fullWellE > 3000, `${cam.id}: ${r.sensor.fullWellE}`);
+  }
+  assert.ok(sensorFor({ sensorType: null, widthPx: 1920 }, 5.184).pixelUm > 2.6);
 });

@@ -5,6 +5,7 @@ import { resolveHeights, drawOrder, resolveCamera, effectiveLight, detectionPara
 import { project, planeScale, rectCorners, distortionMap, DEG } from '../core/optics.js';
 import { SRGB_TO_LINEAR, LINEAR_TO_SRGB8, illuminantRgb, wbGainsForKelvin, grayWorldGains } from '../core/color.js';
 import { lightSources, timeFactor, flickerAverage } from '../core/lighting.js';
+import { whiteSignalPerLuxS, snrDb } from '../core/sensor.js';
 import { colorLut, colorMaskLut, evaluate, verdict, profileBand, analyzeProfile, verdictLogo } from '../core/detection.js';
 import { topTexture, sideColor, inkTexture } from './textures.js';
 
@@ -14,12 +15,12 @@ let mapCache = { key: '', map: null };
 const fieldCache = new Map();
 let lutCache = { key: '', lut: null };
 
-// Ruído pré-calculado (distribuição triangular em [-1, 1])
+// Ruído pré-calculado: soma de 3 uniformes, desvio padrão 1 (quase gaussiana)
 const NOISE = (() => {
   const t = new Float32Array(1 << 16);
   let x = 2463534242;
   const r = () => { x ^= x << 13; x ^= x >>> 17; x ^= x << 5; return (x >>> 0) / 4294967296; };
-  for (let i = 0; i < t.length; i++) t[i] = r() + r() - 1;
+  for (let i = 0; i < t.length; i++) t[i] = (r() + r() + r() - 1.5) * 2;
   return t;
 })();
 
@@ -199,9 +200,11 @@ export async function renderCamera(scene, captureSeed = 1) {
   const LIN = SRGB_TO_LINEAR;
 
   // Estatísticas do sinal bruto (amostradas), por fonte, para exposição e balanço automáticos.
-  // m[c] = média do canal c com a fonte em "1 unidade" (lux/500 · 0,9, 1/120 s, 0 dB).
+  // m[c] = média do canal c por segundo de exposição, em fração da saturação do pixel (0 dB).
+  // kWhite: equação da câmera com a abertura da lente e a saturação do sensor (src/core/sensor.js).
+  const kWhite = whiteSignalPerLuxS(cam.sensor, cam.lens.aperture);
   for (const src of sources) {
-    const base = (src.lux / 500) * 0.9;
+    const base = src.lux * kWhite;
     let r = 0, g = 0, b = 0, n = 0;
     for (let j = 0; j < N; j += 17) {
       const i = j << 2;
@@ -256,7 +259,7 @@ export async function renderCamera(scene, captureSeed = 1) {
   const S = sources.length;
   // coeficientes por fonte: difuso (kd) e reflexo (ks), por canal, já com exposição e balanço
   const kd = sources.map((src) => {
-    const k = (src.lux / 500) * 0.9 * timeFactor(src, shutter) * gainLin * 4095;
+    const k = src.lux * kWhite * timeFactor(src, shutter) * gainLin * 4095;
     return [k * src.ill[0] * wb[0], k * src.ill[1] * wb[1], k * src.ill[2] * wb[2]];
   });
   const rows = sources.map((src) => {
@@ -270,7 +273,13 @@ export async function renderCamera(scene, captureSeed = 1) {
 
   // Pixels
   const out = new Uint8ClampedArray(N * 4);
-  const sigma = (c.noise ? 0.004 + 0.006 * Math.pow(gainLin, 0.8) : 0) * 4095;
+  // Ruído do sensor, por canal, antes do balanço de branco: variância = disparo (∝ elétrons) + leitura.
+  // Em unidades de saída (0..4095): σ² = a·v + b, com a = 4095·ganho/fullWell e b = (a·ruídoLeitura)².
+  // O balanço de branco multiplica o canal depois, e com ele o ruído.
+  const nA = (4095 * gainLin) / cam.sensor.fullWellE, nB = (nA * cam.sensor.readNoiseE) ** 2;
+  const noisy = !!c.noise;
+  const naR = nA * wb[0], naG = nA * wb[1], naB = nA * wb[2];
+  const nbR = nB * wb[0] ** 2, nbG = nB * wb[1] ** 2, nbB = nB * wb[2] ** 2;
   const bw = c.colorMode === 'bw';
   const OUT = LINEAR_TO_SRGB8;
   let clipped = 0;
@@ -296,10 +305,10 @@ export async function renderCamera(scene, captureSeed = 1) {
       let r = LIN[rgba[i]] * ar + gl * br;
       let g = LIN[rgba[i + 1]] * ag + gl * bg;
       let b = LIN[rgba[i + 2]] * ab + gl * bb;
-      if (sigma) {
-        r += NOISE[ni] * sigma; ni = (ni + 1) & 65535;
-        g += NOISE[ni] * sigma; ni = (ni + 1) & 65535;
-        b += NOISE[ni] * sigma; ni = (ni + 7) & 65535;
+      if (noisy) {
+        r += NOISE[ni] * Math.sqrt(naR * (r > 0 ? r : 0) + nbR); ni = (ni + 1) & 65535;
+        g += NOISE[ni] * Math.sqrt(naG * (g > 0 ? g : 0) + nbG); ni = (ni + 1) & 65535;
+        b += NOISE[ni] * Math.sqrt(naB * (b > 0 ? b : 0) + nbB); ni = (ni + 7) & 65535;
       }
       if (r >= 4095 || g >= 4095 || b >= 4095) clipped++;
       if (bw) r = g = b = 0.2126 * r + 0.7152 * g + 0.0722 * b;
@@ -392,7 +401,13 @@ export async function renderCamera(scene, captureSeed = 1) {
     mode,
     profile,
     what,
-    exposure: { shutter, gainDb, clippedRatio: clipped / N },
+    exposure: {
+      shutter, gainDb, clippedRatio: clipped / N,
+      // cinza médio da imagem: elétrons por pixel e relação sinal/ruído
+      meanE: Math.min(1, lumaAt(shutter)) * cam.sensor.fullWellE,
+      snrDb: snrDb(cam.sensor, Math.min(1, lumaAt(shutter)) * gainLin, gainLin),
+    },
+    sensor: cam.sensor,
     wb,
     light: effectiveLight(scene.light),
   };

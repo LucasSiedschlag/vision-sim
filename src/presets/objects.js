@@ -103,7 +103,8 @@ export function exampleScene() {
       custom: null,
       zoom: 0.35,
       x: 0, y: 0, z: 1300,
-      exposureMode: 'manual',
+      // F1.0 sob ~600 lux satura em 1/120 s (sensor real): a exposição automática encurta o obturador
+      exposureMode: 'auto',
       shutter: 1 / 120,
       gainDb: 0,
       wbMode: 'manual-k',

@@ -3,6 +3,7 @@
 import { CAMERAS, customCamera, isZoom } from '../presets/cameras.js';
 import { lensState, focalPx, footprint, mmPerPixel, depthOfField } from './optics.js';
 import { hexToRgb, rgbToHsv } from './color.js';
+import { sensorFor } from './sensor.js';
 import { lightSources, lightMix, dayVariation, combinedFlicker, isFlickerSafe } from './lighting.js';
 
 /** Altura da base de cada objeto, seguindo a cadeia "apoiar sobre". */
@@ -47,6 +48,7 @@ export function resolveCamera(sceneCam) {
   return {
     model,
     lens,
+    sensor: sensorFor(model, lens.sensorW),
     zoomable: isZoom(model),
     x: sceneCam.x, y: sceneCam.y, z: sceneCam.z,
     w: model.widthPx, h: model.heightPx,

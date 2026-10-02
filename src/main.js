@@ -297,6 +297,9 @@ function start(saved) {
     metric('exposure', 'Exposição', `${shutterLabel(ex.shutter)} · ${ex.gainDb.toFixed(0)} dB`,
       clip > 0.02 ? 'bad' : ex.gainDb > 18 ? 'warn' : 'ok',
       clip > 0.002 ? `${(clip * 100).toFixed(1)}% da imagem estourada` : ex.gainDb > 18 ? 'ganho alto, mais ruído' : 'sem áreas estouradas');
+    metric('noise', 'Ruído no cinza médio', `SNR ${ex.snrDb.toFixed(0)} dB`,
+      ex.snrDb < 20 ? 'bad' : ex.snrDb < 30 ? 'warn' : 'ok',
+      `${Math.round(ex.meanE).toLocaleString('pt-BR')} e⁻ por pixel${ex.snrDb < 20 ? ' · granulado visível' : ''}`);
     metric('flicker', 'Variação entre fotos', `±${(lm.flickerSpread * 50).toFixed(0)}%`,
       lm.flickerSpread > 0.1 ? 'bad' : lm.flickerSpread > 0.03 ? 'warn' : 'ok',
       lm.flickerSafe ? 'obturador em sincronia com a rede' : 'obturador fora de sincronia com 60 Hz');

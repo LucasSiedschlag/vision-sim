@@ -44,6 +44,7 @@ src/
   core/                 cálculo puro, sem DOM (testado em Node)
     optics.js           FOV, mm/pixel, projeção, profundidade de campo, distorção
     color.js            sRGB/linear, temperatura de cor, HSV, balanço de branco
+    sensor.js           equação da câmera, saturação e ruído do pixel (dados do Sony IMX327)
     lighting.js         tipos de luz, dia, flicker, exposição
     detection.js        máscara por cor (com tabela de 32 768 cores), avaliação, veredito
     scene.js            empilhamento, câmera resolvida, indicadores
@@ -77,6 +78,7 @@ detecção. "Abrir cena" carrega de volta. Útil para guardar uma configuração
 ## Limitações
 
 Leia `docs/modelo.md`. Em resumo: a câmera sempre olha reto para baixo, a luz não projeta sombras, o
-reflexo é uma mancha aproximada e os valores de exposição são relativos (calibrados para 500 lux,
-1/120 s e 0 dB darem uma imagem bem exposta). Serve para comparar opções e explicar efeitos, não para
-substituir o teste com a câmera real.
+reflexo é uma mancha aproximada. A exposição e o ruído seguem a equação da câmera e o datasheet do
+sensor Sony IMX327 (abertura, tamanho do pixel, obturador e ganho mudam a imagem como na câmera real),
+mas os sensores das câmeras da lista são estimados pelo formato óptico até serem medidos. Serve para
+comparar opções e explicar efeitos, não para substituir o teste com a câmera real.
