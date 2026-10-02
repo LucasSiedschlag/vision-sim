@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<!-- head:start -->
+<title>Bancada Virtual de Visão</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@75..100,500..800&family=Atkinson+Hyperlegible:wght@400;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="css/styles.css">
+<!-- head:end -->
+</head>
+<body>
+<!-- body:start -->
+<header class="topbar">
+  <div class="brand">
+    <span class="mark" aria-hidden="true"></span>
+    <h1>Bancada Virtual de Visão</h1>
+    <span class="scene-name" id="scene-name"></span>
+  </div>
+  <div class="actions">
+    <button type="button" class="btn btn-quiet" id="btn-example">Exemplo</button>
+    <label class="btn btn-quiet" for="file-open">Abrir cena</label>
+    <input type="file" id="file-open" accept=".json,application/json" class="visually-hidden">
+    <button type="button" class="btn" id="btn-save">Salvar cena</button>
+    <button type="button" class="btn btn-primary" id="btn-shot">Salvar imagem</button>
+  </div>
+</header>
+
+<div class="app">
+  <aside class="rail" aria-label="Configuração">
+    <nav class="tabs" role="tablist">
+      <button type="button" role="tab" data-tab="cena" aria-selected="true">Cena</button>
+      <button type="button" role="tab" data-tab="camera">Câmera</button>
+      <button type="button" role="tab" data-tab="luz">Luz</button>
+      <button type="button" role="tab" data-tab="deteccao">Detecção</button>
+    </nav>
+    <div class="panel" id="panel" role="tabpanel"></div>
+  </aside>
+
+  <main class="stage">
+    <section class="view view-top" aria-label="Vista de cima">
+      <header><h2>Vista de cima</h2><small>arraste objetos e a câmera · Shift: ajuste fino · setas: 10 mm</small><output class="drag-info" id="top-info"></output></header>
+      <canvas id="cv-top" tabindex="0" aria-label="Planta da bancada com objetos e campo de visão"></canvas>
+    </section>
+
+    <section class="view view-front" aria-label="Vista de frente">
+      <header><h2>Vista de frente</h2><small>arraste a câmera · Shift: ajuste fino · ↑↓: altura</small><output class="drag-info" id="front-info"></output></header>
+      <canvas id="cv-front" tabindex="0" aria-label="Elevação com altura da câmera e cone de visão"></canvas>
+    </section>
+
+    <section class="view view-cam" aria-label="Imagem da câmera">
+      <header>
+        <h2>Imagem da câmera</h2><small id="cam-res"></small>
+        <div class="cam-tools">
+          <span class="legend"><i class="lg-hit"></i>contorno da fita detectada <i class="lg-fp"></i>fora da fita <i class="lg-miss"></i>não reconhecido</span>
+          <label class="tgl"><input type="checkbox" id="tgl-mask"> máscara</label>
+          <button type="button" class="btn btn-quiet btn-sm" id="btn-shoot">Nova foto</button>
+        </div>
+      </header>
+      <div class="cam-wrap">
+        <canvas id="cv-cam" aria-label="Imagem simulada da câmera"></canvas>
+        <canvas id="cv-overlay" aria-hidden="true"></canvas>
+        <div class="loupe-box" id="loupe-box" hidden></div>
+        <div class="busy" id="cam-busy" hidden>processando…</div>
+      </div>
+    </section>
+
+    <aside class="readout" aria-label="Resultado">
+      <div class="verdict" id="verdict" data-state="">
+        <span class="eyebrow">Inspeção da fita</span>
+        <strong class="verdict-label">Calculando…</strong>
+        <ul class="verdict-reasons"></ul>
+        <canvas class="verdict-strip" id="verdict-strip" width="600" height="18" hidden aria-label="Logos encontrados ao longo da fita"></canvas>
+        <small class="strip-cap" id="verdict-strip-cap" hidden><span><i class="lg-hit"></i>logo encontrado</span><span><i class="lg-miss"></i>trecho sem logo acima do limite</span></small>
+        <small class="verdict-nums"></small>
+      </div>
+      <figure class="loupe">
+        <canvas id="cv-loupe" width="480" height="270"></canvas>
+        <figcaption>
+          <div class="loupe-ctl">
+            <label for="loupe-zoom">Lupa</label>
+            <input type="range" id="loupe-zoom" min="2" max="16" step="1" value="4">
+            <output id="loupe-zoom-out" for="loupe-zoom">4×</output>
+            <label class="tgl"><input type="checkbox" id="loupe-mask"> máscara</label>
+          </div>
+          <span id="loupe-state">Passe o mouse na imagem; clique para fixar o ponto.</span>
+        </figcaption>
+      </figure>
+      <dl class="metrics" id="metrics"></dl>
+    </aside>
+  </main>
+</div>
+
+<div class="compare" id="compare" hidden role="dialog" aria-modal="true" aria-labelledby="compare-title">
+  <div class="compare-panel">
+    <header>
+      <div><h2 id="compare-title">Comparação de caixas</h2><small id="compare-sub"></small></div>
+      <button type="button" class="btn" id="compare-close">Fechar</button>
+    </header>
+    <div class="compare-grid" id="compare-grid"></div>
+  </div>
+</div>
+
+<div class="toast" id="toast" role="status" hidden></div>
+
+<script type="module" src="src/main.js"></script>
+<!-- body:end -->
+</body>
+</html>
