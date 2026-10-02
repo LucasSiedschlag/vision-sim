@@ -37,7 +37,8 @@ export function vfov(hfovDeg, widthPx, heightPx) {
 /**
  * Estado óptico de uma câmera com zoom `zoom` (0 = grande angular, 1 = tele).
  * Para lente fixa, zoom é ignorado.
- * Retorna FOV horizontal, focal (mm), largura do sensor (mm), pitch do pixel e k1 da distorção.
+ * Retorna o FOV horizontal do datasheet nesse zoom, focal (mm), largura do sensor (mm), pitch do pixel e k1
+ * da distorção (k1 é o λ do modelo de divisão, ver lensProjection).
  */
 export function lensState(cam, zoom = 0) {
   const t = cam.hfov.length > 1 ? Math.min(1, Math.max(0, zoom)) : 0;
@@ -47,11 +48,14 @@ export function lensState(cam, zoom = 0) {
   const sensorW = 2 * fWide * Math.tan((cam.hfov[0] * DEG) / 2);
   // Interpolação em focal (linear em mm, como um zoom real).
   const f = fWide + (fTele - fWide) * t;
-  const hfov = 2 * Math.atan(sensorW / (2 * f)) / DEG;
   const pitch = sensorW / cam.widthPx;
   // Distorção diminui conforme o zoom fecha.
   const k1 = (cam.distortionK ?? 0) * Math.pow(fWide / f, 2);
-  return { hfov, focalMm: f, sensorW, pitchMm: pitch, k1, aperture: cam.aperture };
+  // Interpola o FOV do datasheet (o que a imagem mostra de borda a borda) entre os extremos do zoom,
+  // na tangente, que é o que escala com a focal.
+  const tw = Math.tan((cam.hfov[0] * DEG) / 2), tt = Math.tan((cam.hfov[cam.hfov.length - 1] * DEG) / 2);
+  const hfovSheet = cam.hfov.length > 1 ? (2 * Math.atan(1 / (1 / tw + (1 / tt - 1 / tw) * ((f - fWide) / (fTele - fWide || 1))))) / DEG : cam.hfov[0];
+  return { hfov: hfovSheet, focalMm: f, sensorW, pitchMm: pitch, k1, aperture: cam.aperture };
 }
 
 /**
@@ -95,37 +99,67 @@ export function rectCorners(o, z) {
 }
 
 /**
- * Tabela de remapeamento para distorção radial (barril quando k1 < 0).
- * Para cada pixel da imagem final (distorcida), o índice do pixel de origem na imagem ideal.
- * Normalizado pela meia-diagonal, de modo que os cantos ficam no lugar.
+ * Projeção da lente com distorção radial pelo modelo de divisão (Fitzgibbon):
+ *   r_ideal = r_imagem / (1 + λ · n²),  n = r_imagem / (meia largura)
+ * λ < 0 é barril. A escala do centro (fpx) é escolhida para que a borda horizontal da imagem caia
+ * exatamente no FOV do datasheet: o que o fabricante mede é o campo da imagem já distorcida.
+ * distort = false: imagem corrigida pela câmera (LDC): mesma escala no centro, bordas cortadas.
+ * Retorna fpx (px por unidade de tangente no centro), λ efetivo e FOV horizontal/vertical da imagem.
  */
-export function distortionMap(w, h, k1) {
-  const map = new Int32Array(w * h);
-  const cx = (w - 1) / 2, cy = (h - 1) / 2;
-  const R = Math.hypot(cx, cy);
-  // Fator de escala em função de r² (tabela 1D): evita a iteração por pixel.
-  const N = 2048;
-  const lut = new Float32Array(N + 1);
-  for (let i = 0; i <= N; i++) {
-    const rd = Math.sqrt(i / N);
-    let rs = rd;
-    // Inverte rd = rs(1 + k rs²)/(1 + k) por iteração de ponto fixo.
-    for (let k = 0; k < 6; k++) rs = (rd * (1 + k1)) / (1 + k1 * rs * rs);
-    lut[i] = rd > 0 ? rs / rd : 1 + k1;
-  }
-  const invR2 = 1 / (R * R);
-  for (let y = 0; y < h; y++) {
-    const dy = y - cy;
-    const dy2 = dy * dy;
-    for (let x = 0; x < w; x++) {
-      const dx = x - cx;
-      const t = (dx * dx + dy2) * invR2 * N;
-      const i0 = t | 0;
-      const scale = i0 >= N ? lut[N] : lut[i0] + (lut[i0 + 1] - lut[i0]) * (t - i0);
-      const sx = Math.round(cx + dx * scale);
-      const sy = Math.round(cy + dy * scale);
-      map[y * w + x] = sx >= 0 && sx < w && sy >= 0 && sy < h ? sy * w + sx : -1;
+export function lensProjection(widthPx, heightPx, hfovDeg, k1, distort = true) {
+  const half = widthPx / 2;
+  const nCorner = Math.hypot(widthPx, heightPx) / widthPx;
+  // o modelo só vale enquanto 1 + λn² > 0 nos cantos; limita barris exagerados
+  const lam = Math.max(k1, -0.85 / (nCorner * nCorner));
+  const fpx = half / ((1 + lam) * Math.tan((hfovDeg * DEG) / 2));
+  const L = distort ? lam : 0;
+  const tanAt = (n) => (n / (1 + L * n * n)) * (half / fpx); // tangente do raio na borda, a n meias larguras
+  const aspect = heightPx / widthPx;
+  return {
+    fpx, lambda: L,
+    hfov: (2 * Math.atan(tanAt(1))) / DEG,
+    vfov: (2 * Math.atan(tanAt(aspect))) / DEG,
+    // quanto a imagem ideal (sem distorção) precisa ser maior para cobrir os cantos
+    cornerScale: 1 / (1 + L * nCorner * nCorner),
+  };
+}
+
+/**
+ * Para cada pixel da imagem entregue (W × H), o índice do pixel de origem na imagem ideal
+ * (Wi × Hi, renderizada com escala q em relação a fpx). -1 = fora da imagem ideal.
+ */
+export function lensMap(W, H, Wi, Hi, lambda, q = 1) {
+  const map = new Int32Array(W * H);
+  const half = W / 2, cx = W / 2, cy = H / 2, ci = Wi / 2, cj = Hi / 2;
+  const inv = 1 / (half * half);
+  for (let y = 0, j = 0; y < H; y++) {
+    const dy = y + 0.5 - cy;
+    for (let x = 0; x < W; x++, j++) {
+      const dx = x + 0.5 - cx;
+      const s = q / (1 + lambda * (dx * dx + dy * dy) * inv);
+      const sx = Math.floor(ci + dx * s), sy = Math.floor(cj + dy * s);
+      map[j] = sx >= 0 && sx < Wi && sy >= 0 && sy < Hi ? sy * Wi + sx : -1;
     }
   }
   return map;
+}
+
+/**
+ * Projeção de um ponto do mundo na imagem entregue, com a distorção da lente.
+ * cam: câmera resolvida (fpx, lambda, w, h). null se o ponto está fora do alcance da lente.
+ */
+export function projectImage(p, cam) {
+  const depth = cam.z - p.z;
+  if (depth <= 1) return null;
+  const du = ((p.x - cam.x) * cam.fpx) / depth, dv = ((p.y - cam.y) * cam.fpx) / depth;
+  const half = cam.w / 2;
+  const nu = Math.hypot(du, dv) / half;
+  let k = 1;
+  if (cam.lambda && nu > 1e-9) {
+    // nu = nd / (1 + λ nd²)  →  λ nu nd² − nd + nu = 0
+    const disc = 1 - 4 * cam.lambda * nu * nu;
+    if (disc < 0) return null;
+    k = (1 - Math.sqrt(disc)) / (2 * cam.lambda * nu) / nu;
+  }
+  return { u: cam.w / 2 + du * k, v: cam.h / 2 + dv * k };
 }

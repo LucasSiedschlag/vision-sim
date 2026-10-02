@@ -1,7 +1,7 @@
 // Regras da cena: empilhamento, câmera resolvida e indicadores. Puro, sem DOM.
 
 import { CAMERAS, customCamera, isZoom } from '../presets/cameras.js';
-import { lensState, focalPx, footprint, mmPerPixel, depthOfField } from './optics.js';
+import { lensState, lensProjection, projectImage, depthOfField, DEG } from './optics.js';
 import { hexToRgb, rgbToHsv } from './color.js';
 import { sensorFor } from './sensor.js';
 import { lightSources, lightMix, dayVariation, combinedFlicker, isFlickerSafe } from './lighting.js';
@@ -41,10 +41,14 @@ export function cameraModel(sceneCam) {
   return CAMERAS.find((c) => c.id === sceneCam.modelId) || CAMERAS[0];
 }
 
-/** Câmera pronta para renderizar: modelo + zoom + posição. */
+/**
+ * Câmera pronta para renderizar: modelo + zoom + posição + projeção da lente.
+ * fpx: escala no centro da imagem; lambda: distorção; hfov/vfov: campo que a imagem entregue mostra.
+ */
 export function resolveCamera(sceneCam) {
   const model = cameraModel(sceneCam);
   const lens = lensState(model, sceneCam.zoom);
+  const proj = lensProjection(model.widthPx, model.heightPx, lens.hfov, lens.k1, sceneCam.distortion !== false);
   return {
     model,
     lens,
@@ -52,7 +56,15 @@ export function resolveCamera(sceneCam) {
     zoomable: isZoom(model),
     x: sceneCam.x, y: sceneCam.y, z: sceneCam.z,
     w: model.widthPx, h: model.heightPx,
-    fpx: focalPx(model.widthPx, lens.hfov),
+    fpx: proj.fpx, lambda: proj.lambda, hfov: proj.hfov, vfov: proj.vfov, cornerScale: proj.cornerScale,
+  };
+}
+
+/** Largura e altura (mm) do campo que a imagem mostra num plano a `distanceMm` da câmera. */
+export function fieldAt(cam, distanceMm) {
+  return {
+    width: 2 * distanceMm * Math.tan((cam.hfov * DEG) / 2),
+    height: 2 * distanceMm * Math.tan((cam.vfov * DEG) / 2),
   };
 }
 
@@ -99,10 +111,10 @@ export function opticsMetrics(scene) {
   const cam = resolveCamera(scene.camera);
   const plane = targetPlane(resolved);
   const dist = cam.z - plane.z;
-  const fp = footprint(dist, cam.lens.hfov, cam.w, cam.h);
-  const mmpx = mmPerPixel(dist, cam.lens.hfov, cam.w);
+  const fp = fieldAt(cam, dist);
+  const mmpx = dist / cam.fpx; // no centro da imagem; com distorção em barril, as bordas cobrem mais mm por pixel
   const targetSize = plane.target ? Math.min(plane.target.w, plane.target.d) : null;
-  const coc = cam.lens.pitchMm * 2;
+  const coc = (cam.sensor.pixelUm / 1000) * 2;
   const dof = depthOfField(cam.lens.focalMm, cam.lens.aperture, coc, Math.max(dist, cam.lens.focalMm * 20));
   const lowest = resolved.filter((o) => o.visible && o.kind !== 'flat').reduce((m, o) => Math.min(m, o.z1), plane.z);
   const sharp = dist >= dof.near - 1 && cam.z - lowest <= dof.far + 1;
@@ -113,7 +125,7 @@ export function opticsMetrics(scene) {
     mmPerPx: mmpx,
     targetPx: targetSize ? targetSize / mmpx : null,
     targetName: plane.target?.name ?? null,
-    hfov: cam.lens.hfov,
+    hfov: cam.hfov,
     focalMm: cam.lens.focalMm,
     dofNear: dof.near,
     dofFar: dof.far,
@@ -209,11 +221,9 @@ export function boxInView(scene) {
   let margin = Infinity;
   for (const z of [box.z0, box.z1]) {
     for (const p of rectCornersAt(box, z)) {
-      const depth = cam.z - p.z;
-      if (depth <= 1) return { inside: false, marginPx: -Infinity };
-      const u = cam.w / 2 + ((p.x - cam.x) * cam.fpx) / depth;
-      const v = cam.h / 2 + ((p.y - cam.y) * cam.fpx) / depth;
-      margin = Math.min(margin, u, v, cam.w - u, cam.h - v);
+      const q = projectImage(p, cam); // com a distorção: é o que a imagem entregue mostra
+      if (!q) return { inside: false, marginPx: -Infinity };
+      margin = Math.min(margin, q.u, q.v, cam.w - q.u, cam.h - q.v);
     }
   }
   return { inside: margin >= 0, marginPx: margin };

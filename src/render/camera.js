@@ -2,7 +2,7 @@
 // → ruído → modo de cor → compressão JPEG → detecção.
 
 import { resolveHeights, drawOrder, resolveCamera, effectiveLight, detectionParams, detectionMode, lightContext } from '../core/scene.js';
-import { project, planeScale, rectCorners, distortionMap, DEG } from '../core/optics.js';
+import { project, planeScale, rectCorners, lensMap, DEG } from '../core/optics.js';
 import { SRGB_TO_LINEAR, LINEAR_TO_SRGB8, illuminantRgb, wbGainsForKelvin, grayWorldGains } from '../core/color.js';
 import { lightSources, timeFactor, flickerAverage } from '../core/lighting.js';
 import { whiteSignalPerLuxS, snrDb } from '../core/sensor.js';
@@ -131,34 +131,44 @@ export async function renderCamera(scene, captureSeed = 1) {
   const W = cam.w, H = cam.h, N = W * H;
   const objs = drawOrder(resolveHeights(scene.objects));
 
-  const refl = canvas('refl', W, H), data = canvas('data', W, H);
+  // Imagem ideal (perspectiva sem distorção, mesma escala do centro). Com barril, os cantos da imagem
+  // entregue vêm de fora do retângulo W × H: a ideal é maior. Limite de 2,5× os pixels (escala q < 1).
+  const grow = cam.lambda ? cam.cornerScale : 1;
+  let q = 1;
+  if (grow * grow > 2.5) q = Math.sqrt(2.5) / grow;
+  const Wi = cam.lambda ? 2 * Math.ceil((W / 2) * grow * q) + 2 : W;
+  const Hi = cam.lambda ? 2 * Math.ceil((H / 2) * grow * q) + 2 : H;
+  const icam = { ...cam, w: Wi, h: Hi, fpx: cam.fpx * q };
+
+  const refl = canvas('refl', Wi, Hi), data = canvas('data', Wi, Hi);
   const rctx = refl.getContext('2d', { willReadFrequently: true });
   const dctx = data.getContext('2d', { willReadFrequently: true });
-  drawGeometry(rctx, objs, cam, 'color');
+  drawGeometry(rctx, objs, icam, 'color');
   const p = detectionParams(scene.detection);
   const lkey = `${p.hue.toFixed(1)}|${p.hueTol}|${p.sMin}|${p.vMin}`;
   if (lutCache.key !== lkey) lutCache = { key: lkey, lut: colorLut(p) };
-  drawGeometry(dctx, objs, cam, 'data', { lut: lutCache.lut, key: lkey });
+  drawGeometry(dctx, objs, icam, 'data', { lut: lutCache.lut, key: lkey });
   mark('desenho');
 
-  let rgba = rctx.getImageData(0, 0, W, H).data;
-  let aux = dctx.getImageData(0, 0, W, H).data; // G = alvo, B = tinta da cor procurada
+  let rgba = rctx.getImageData(0, 0, Wi, Hi).data;
+  let aux = dctx.getImageData(0, 0, Wi, Hi).data; // G = alvo, B = tinta da cor procurada
 
   // Luz: soma de todas as fontes ligadas (galpão e luminárias da bancada). Iluminância e reflexo de
   // cada luminária calculados por pixel na imagem ideal (src/core/illumination.js), em cache.
   const lsrc = lightSources(scene.light, lightContext(scene));
-  const fkey = JSON.stringify([W, H, cam.x, cam.y, cam.z, cam.fpx,
+  const fkey = JSON.stringify([Wi, Hi, cam.x, cam.y, cam.z, icam.fpx,
     objs.map((o) => [o.x, o.y, o.z1, o.w, o.d, o.rot, o.surface, o.roughness, o.gloss]),
     lsrc.map((s) => [s.group, s.lux, s.gradient, s.lum])]);
-  if (fieldCache.key !== fkey) fieldCache = { key: fkey, fields: computeLightFields({ cam, W, H, objs, sources: lsrc }), distorted: new Map() };
+  if (fieldCache.key !== fkey) fieldCache = { key: fkey, fields: computeLightFields({ cam: icam, W: Wi, H: Hi, objs, sources: lsrc }), distorted: new Map() };
   let fields = fieldCache.fields;
   mark('luz por pixel');
 
-  // Distorção da lente (barril): imagem, dados e mapas de luz passam pelo mesmo remapeamento
-  const k1 = scene.camera.distortion ? Math.round(cam.lens.k1 * 200) / 200 : 0;
-  if (Math.abs(k1) > 1e-3) {
-    const key = `${W}x${H}:${k1}`;
-    if (mapCache.key !== key) mapCache = { key, map: distortionMap(W, H, k1) };
+  // Distorção da lente: imagem, dados e mapas de luz passam pelo mesmo remapeamento ideal → entregue
+  let lmap = null;
+  if (cam.lambda) {
+    const key = `${W}x${H}:${Wi}x${Hi}:${cam.lambda}:${q}`;
+    if (mapCache.key !== key) mapCache = { key, map: lensMap(W, H, Wi, Hi, cam.lambda, q) };
+    lmap = mapCache.map;
     rgba = remap32(rgba, mapCache.map);
     aux = remap32(aux, mapCache.map);
     if (!fieldCache.distorted.has(key)) {
@@ -353,12 +363,13 @@ export async function renderCamera(scene, captureSeed = 1) {
       const rel = ang - parent.rot * DEG;
       len = Math.abs(Math.cos(rel)) * parent.w + Math.abs(Math.sin(rel)) * parent.d;
     }
-    const a = project({ x: cx - ux * len / 2, y: cy - uy * len / 2, z: tgt.z1 }, cam);
-    const b = project({ x: cx + ux * len / 2, y: cy + uy * len / 2, z: tgt.z1 }, cam);
-    const scale = planeScale(tgt.z1, cam);
+    // na imagem ideal, onde a emenda é uma reta (a distorção a curvaria)
+    const a = project({ x: cx - ux * len / 2, y: cy - uy * len / 2, z: tgt.z1 }, icam);
+    const b = project({ x: cx + ux * len / 2, y: cy + uy * len / 2, z: tgt.z1 }, icam);
+    const scale = planeScale(tgt.z1, icam);
     if (a && b && scale) {
       const halfPx = ((long ? tgt.d : tgt.w) / 2) * scale;
-      profile = analyzeProfile(profileBand(mask, W, H, a, b, halfPx, len));
+      profile = analyzeProfile(profileBand(mask, W, H, a, b, halfPx, len, 256, lmap, Wi));
       v = verdictLogo(result, profile, scene.detection);
     }
   }

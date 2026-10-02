@@ -15,11 +15,21 @@ calcula e onde ela simplifica a realidade.
 
 ## Lente
 
-- FOV horizontal do datasheet. Para zoom motorizado, a largura do sensor sai do par (focal, FOV) no
-  grande angular e a focal é interpolada linearmente.
-- Distorção radial de um termo (`k1`), normalizada para os cantos ficarem no lugar. Diminui com o zoom
-  (`k1 · (f_wide / f)²`). Os valores de `k1` são aproximados, não medidos.
-- Profundidade de campo pela fórmula da hiperfocal, com círculo de confusão de 2 pixels e foco no
+- FOV horizontal do datasheet: é o campo da imagem entregue, já distorcida, de borda a borda. Para zoom
+  motorizado, a focal é interpolada linearmente e o FOV entre os dois extremos do datasheet (linear em
+  1/tan, como numa lente sem distorção).
+- Distorção radial pelo modelo de divisão: `r_ideal = r_imagem / (1 + k1 · n²)`, com n em meias larguras
+  da imagem (barril quando k1 < 0). A escala do centro sai da condição de a borda horizontal cair no FOV
+  do datasheet: `fpx = (W/2) / ((1 + k1) · tan(FOV/2))`. Por isso, com barril, o centro tem mais pixels
+  por mm que uma câmera sem distorção de mesmo FOV, e os indicadores (largura da fita, mm por pixel)
+  usam essa escala do centro: batem com a imagem. Diminui com o zoom (`k1 · (f_wide / f)²`). Os valores
+  de `k1` são aproximados, não medidos (a calibração com tabuleiro de xadrez vai substituí-los).
+- A imagem ideal (perspectiva sem distorção) é renderizada maior que a entregue, para cobrir os cantos
+  que o barril puxa para dentro (até 2,5× os pixels; acima disso, em escala menor).
+- Distorção desligada = correção da própria câmera (LDC): mesma escala no centro, bordas cortadas.
+- "Caixa inteira na imagem" e a lupa usam a projeção com distorção. No modo logo, a emenda é percorrida
+  na imagem ideal, onde ela é reta.
+- Profundidade de campo pela fórmula da hiperfocal, com círculo de confusão de 2 pixels do sensor e foco no
   plano do alvo. Não há desfoque aplicado na imagem; o indicador só avisa.
 
 ## Luz e sensor

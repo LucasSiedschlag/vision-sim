@@ -1,8 +1,8 @@
 // Vista de cima (planta) e vista de frente (elevação), em escala real.
 
-import { resolveHeights, drawOrder, resolveCamera, targetPlane, opticsMetrics } from '../core/scene.js';
+import { resolveHeights, drawOrder, resolveCamera, targetPlane, opticsMetrics, fieldAt } from '../core/scene.js';
 import { normalizeLight, resolveLuminaire, glarePoint, FIXTURE_MODELS } from '../core/lighting.js';
-import { rectCorners, footprint, DEG } from '../core/optics.js';
+import { rectCorners, DEG } from '../core/optics.js';
 import { topTexture, sideColor } from './textures.js';
 
 function token(name) {
@@ -80,7 +80,7 @@ function sceneBounds(scene, resolved, cam) {
     add(lum.x + r, lum.y + r);
   }
   const plane = targetPlane(resolved);
-  const fp = footprint(cam.z - plane.z, cam.lens.hfov, cam.w, cam.h);
+  const fp = fieldAt(cam, cam.z - plane.z);
   add(cam.x - fp.width / 2, cam.y - fp.height / 2);
   add(cam.x + fp.width / 2, cam.y + fp.height / 2);
   if (!Number.isFinite(minX)) { minX = -500; maxX = 500; minY = -400; maxY = 400; }
@@ -132,8 +132,8 @@ export function drawTopView(canvas, scene, ui) {
   drawFixturesTop(ctx, scene, plane, { X, Y, scale, dpr }, ui);
 
   // Campo de visão
-  const fpT = footprint(cam.z - plane.z, cam.lens.hfov, cam.w, cam.h);
-  const fpB = footprint(cam.z, cam.lens.hfov, cam.w, cam.h);
+  const fpT = fieldAt(cam, cam.z - plane.z);
+  const fpB = fieldAt(cam, cam.z);
   const accent = token('--accent');
   ctx.strokeStyle = accent;
   ctx.setLineDash([6 * dpr, 5 * dpr]);
@@ -188,7 +188,7 @@ export function drawFrontView(canvas, scene, ui) {
   const plane = targetPlane(resolved);
 
   // Limites: largura do campo na bancada, objetos e câmera
-  const half = cam.z * Math.tan((cam.lens.hfov * DEG) / 2);
+  const half = cam.z * Math.tan((cam.hfov * DEG) / 2);
   let fb = locked.front;
   if (!fb) {
     let minX = cam.x - half, maxX = cam.x + half;
@@ -274,7 +274,7 @@ export function drawFrontView(canvas, scene, ui) {
   ctx.setLineDash([]);
 
   // Largura do campo no plano do alvo
-  const fpT = footprint(cam.z - plane.z, cam.lens.hfov, cam.w, cam.h);
+  const fpT = fieldAt(cam, cam.z - plane.z);
   ctx.lineWidth = 2.5 * dpr;
   ctx.beginPath();
   ctx.moveTo(X(cam.x - fpT.width / 2), Z(plane.z));

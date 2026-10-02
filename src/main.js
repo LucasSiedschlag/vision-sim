@@ -8,7 +8,7 @@ import { drawTopView, drawFrontView, topToWorld, topViewport, frontViewport, loc
 import { renderCamera } from './render/camera.js';
 import { setAssetListener } from './render/textures.js';
 import { opticsMetrics, lightingMetrics, resolveHeights, drawOrder, resolveCamera, applyBoxVariant, boxInView } from './core/scene.js';
-import { project, rectCorners, DEG } from './core/optics.js';
+import { projectImage, rectCorners, DEG } from './core/optics.js';
 import { shutterLabel } from './core/lighting.js';
 
 const $ = (s) => document.querySelector(s);
@@ -168,7 +168,7 @@ function start(saved) {
     const t = objs.filter((o) => o.isTarget).pop() || objs[objs.length - 1];
     const cam = resolveCamera(sc.camera);
     if (!t) return { u: cam.w / 2, v: cam.h / 2 };
-    const p = project({ x: t.x, y: t.y, z: t.z1 }, cam);
+    const p = projectImage({ x: t.x, y: t.y, z: t.z1 }, cam);
     return p ? { u: p.u, v: p.v } : { u: cam.w / 2, v: cam.h / 2 };
   }
 

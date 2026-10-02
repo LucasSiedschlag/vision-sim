@@ -1,11 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { fieldWidth, mmPerPixel, pixelsAcross, focalPx, lensState, depthOfField, project, distortionMap } from '../src/core/optics.js';
+import { fieldWidth, mmPerPixel, pixelsAcross, focalPx, lensState, depthOfField, project, lensProjection, lensMap, projectImage } from '../src/core/optics.js';
 import { illuminantRgb, wbGainsForKelvin, rgbToHsv, hueDistance, linearToSrgb, srgbToLinear } from '../src/core/color.js';
 import { flickerAverage, flickerRange, isFlickerSafe, ambientAt } from '../src/core/lighting.js';
 import { colorMask, evaluate, verdict } from '../src/core/detection.js';
-import { resolveHeights, opticsMetrics } from '../src/core/scene.js';
+import { resolveHeights, opticsMetrics, resolveCamera } from '../src/core/scene.js';
 import { exampleScene } from '../src/presets/objects.js';
 import { CAMERAS } from '../src/presets/cameras.js';
 
@@ -43,10 +43,57 @@ test('projeção: ponto sob a câmera cai no centro da imagem', () => {
   assert.equal(p.v, 540);
 });
 
-test('distorção: centro fica no lugar e o mapa tem o tamanho da imagem', () => {
-  const m = distortionMap(41, 21, -0.2);
+test('lente: sem distorção o mapa é a identidade; com barril o centro fica no lugar', () => {
+  const id = lensMap(41, 21, 41, 21, 0, 1);
+  for (let j = 0; j < id.length; j++) assert.equal(id[j], j);
+  const m = lensMap(41, 21, 61, 31, -0.2, 1);
   assert.equal(m.length, 41 * 21);
-  assert.equal(m[10 * 41 + 20], 10 * 41 + 20);
+  assert.equal(m[10 * 41 + 20], 15 * 61 + 30);
+});
+
+test('lente: a borda da imagem distorcida cai no FOV do datasheet', () => {
+  for (const k1 of [0, -0.05, -0.14, -0.22]) {
+    const pr = lensProjection(1920, 1080, 85, k1, true);
+    near(pr.hfov, 85, 1e-9);
+    // o ponto do mundo no limite do FOV aparece na borda da imagem
+    const cam = { x: 0, y: 0, z: 1000, w: 1920, h: 1080, fpx: pr.fpx, lambda: pr.lambda };
+    const q = projectImage({ x: 1000 * Math.tan((42.5 * Math.PI) / 180), y: 0, z: 0 }, cam);
+    near(q.u, 1920, 1e-6);
+  }
+  // corrigida pela câmera (LDC): mesma escala no centro, campo menor
+  const on = lensProjection(1920, 1080, 85, -0.14, true), off = lensProjection(1920, 1080, 85, -0.14, false);
+  near(off.fpx, on.fpx, 1e-9);
+  assert.ok(off.hfov < 80, `${off.hfov}`);
+});
+
+test('lente: projeção direta e mapa inverso concordam', () => {
+  const pr = lensProjection(1920, 1080, 94, -0.22, true);
+  const W = 1920, H = 1080, Wi = 2 * Math.ceil((W / 2) * pr.cornerScale) + 2, Hi = 2 * Math.ceil((H / 2) * pr.cornerScale) + 2;
+  const cam = { x: 0, y: 0, z: 1000, w: W, h: H, fpx: pr.fpx, lambda: pr.lambda };
+  const icam = { ...cam, w: Wi, h: Hi };
+  const map = lensMap(W, H, Wi, Hi, pr.lambda, 1);
+  for (const pt of [{ x: 300, y: 200, z: 0 }, { x: -800, y: 400, z: 100 }, { x: 50, y: -30, z: 360 }]) {
+    const out = projectImage(pt, cam), ideal = project(pt, icam);
+    const m = map[Math.floor(out.v) * W + Math.floor(out.u)];
+    near(m % Wi, ideal.u, 1.5);
+    near(Math.floor(m / Wi), ideal.v, 1.5);
+  }
+});
+
+test('lente: largura da fita no indicador = largura na imagem distorcida (centro)', () => {
+  const scene = exampleScene();
+  for (const id of ['ds2cd1027g2h-liu-4', 'ds2cd1021g0i', 'c920']) {
+    scene.camera.modelId = id;
+    const cam = resolveCamera(scene.camera), m = opticsMetrics(scene);
+    const W = cam.w, H = cam.h;
+    const Wi = 2 * Math.ceil((W / 2) * cam.cornerScale) + 2, Hi = 2 * Math.ceil((H / 2) * cam.cornerScale) + 2;
+    const icam = { ...cam, w: Wi, h: Hi };
+    const map = lensMap(W, H, Wi, Hi, cam.lambda, 1);
+    const a = project({ x: 0, y: -24, z: 360.2 }, icam), b = project({ x: 0, y: 24, z: 360.2 }, icam);
+    let rows = 0;
+    for (let v = 0; v < H; v++) { const sv = Math.floor(map[v * W + W / 2] / Wi); if (sv >= a.v && sv < b.v) rows++; }
+    near(rows, m.targetPx, 1.5);
+  }
 });
 
 test('cor: ida e volta sRGB ↔ linear', () => {
@@ -161,7 +208,6 @@ test('luz: difusor troca reflexo forte por macio e perde luz; cobertura reduz a 
 });
 
 import { IMX327, SONY_REF_LUX_S, satFromSony, sensorFromFormat, sensorFor, signalFraction, noiseSigma, snrDb } from '../src/core/sensor.js';
-import { resolveCamera } from '../src/core/scene.js';
 
 test('sensor: referência da Sony (706 cd/m², F5.6, 1/30 s) dá ~0,59 lux·s no sensor', () => {
   near(SONY_REF_LUX_S, 0.5893, 0.0005);

@@ -160,25 +160,33 @@ export function verdictLogo(result, prof, rules) {
 /**
  * Como profileAlong, mas percorre uma faixa geométrica (a emenda da caixa) em vez da área da fita.
  * Assim, uma fita curta ou faltando aparece como trecho sem logo.
- * a, b: extremidades da emenda na imagem; halfWidthPx: meia largura da faixa em px.
+ * a, b: extremidades da emenda; halfWidthPx: meia largura da faixa em px.
+ * Com distorção da lente, `map` (imagem entregue → imagem ideal, largura `wi`) leva cada pixel da
+ * máscara para a imagem ideal, onde a emenda é reta; a, b e halfWidthPx ficam nessa imagem.
  */
-export function profileBand(mask, w, h, a, b, halfWidthPx, lengthMm, bins = 256) {
+export function profileBand(mask, w, h, a, b, halfWidthPx, lengthMm, bins = 256, map = null, wi = w) {
   const ux = b.u - a.u, uy = b.v - a.v;
   const L = Math.hypot(ux, uy) || 1;
   const dx = ux / L, dy = uy / L;
   const tot = new Uint32Array(bins), hit = new Uint32Array(bins);
-  const x0 = Math.max(0, Math.floor(Math.min(a.u, b.u) - halfWidthPx)), x1 = Math.min(w - 1, Math.ceil(Math.max(a.u, b.u) + halfWidthPx));
-  const y0 = Math.max(0, Math.floor(Math.min(a.v, b.v) - halfWidthPx)), y1 = Math.min(h - 1, Math.ceil(Math.max(a.v, b.v) + halfWidthPx));
-  for (let y = y0; y <= y1; y++) {
-    for (let x = x0; x <= x1; x++) {
-      const rx = x - a.u, ry = y - a.v;
-      const along = rx * dx + ry * dy;
-      if (along < 0 || along >= L) continue;
-      if (Math.abs(-rx * dy + ry * dx) > halfWidthPx) continue;
-      const k = ((along / L) * bins) | 0;
-      tot[k]++;
-      if (mask[y * w + x]) hit[k]++;
+  const visit = (x, y, j) => {
+    const rx = x - a.u, ry = y - a.v;
+    const along = rx * dx + ry * dy;
+    if (along < 0 || along >= L) return;
+    if (Math.abs(-rx * dy + ry * dx) > halfWidthPx) return;
+    const k = ((along / L) * bins) | 0;
+    tot[k]++;
+    if (mask[j]) hit[k]++;
+  };
+  if (map) {
+    for (let j = 0; j < map.length; j++) {
+      const m = map[j];
+      if (m >= 0) visit((m % wi) + 0.5, ((m / wi) | 0) + 0.5, j);
     }
+  } else {
+    const x0 = Math.max(0, Math.floor(Math.min(a.u, b.u) - halfWidthPx)), x1 = Math.min(w - 1, Math.ceil(Math.max(a.u, b.u) + halfWidthPx));
+    const y0 = Math.max(0, Math.floor(Math.min(a.v, b.v) - halfWidthPx)), y1 = Math.min(h - 1, Math.ceil(Math.max(a.v, b.v) + halfWidthPx));
+    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) visit(x, y, y * w + x);
   }
   return { tot, hit, bins, lengthMm };
 }
