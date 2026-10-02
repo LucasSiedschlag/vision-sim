@@ -14,7 +14,7 @@ const BASE = {
   rot: 0, sitOn: null, baseZ: 0,
   color: '#888888', sideColor: null,
   texture: null, image: null, imageName: null,
-  tint: [1, 1, 1], opacity: 1, gloss: 0,
+  tint: [1, 1, 1], opacity: 1, surface: 'matte', roughness: 1,
   isTarget: false, visible: true, keepAspect: true,
 };
 
@@ -22,32 +22,32 @@ export const OBJECT_PRESETS = [
   {
     key: 'plate',
     label: 'Prato da balança',
-    make: () => ({ ...BASE, name: 'Prato da balança', kind: 'box', w: 600, d: 450, h: 60, color: '#a7adb2', texture: 'plate', gloss: 0.35 }),
+    make: () => ({ ...BASE, name: 'Prato da balança', kind: 'box', w: 600, d: 450, h: 60, color: '#a7adb2', texture: 'plate', surface: 'metal', roughness: 0.2 }),
   },
   {
     key: 'box',
     label: 'Caixa de papelão (pardo)',
-    make: () => ({ ...BASE, name: 'Caixa de papelão', kind: 'box', w: 500, d: 350, h: 300, color: '#b8875a', texture: 'kraft', gloss: 0.05 }),
+    make: () => ({ ...BASE, name: 'Caixa de papelão', kind: 'box', w: 500, d: 350, h: 300, color: '#b8875a', texture: 'kraft', surface: 'paper', roughness: 0.45 }),
   },
   {
     key: 'tape-red',
     label: 'Fita vermelha 48 mm',
-    make: () => ({ ...BASE, name: 'Fita vermelha', kind: 'flat', w: 500, d: 48, h: 0.2, color: '#d0202a', texture: 'tape', gloss: 0.7, isTarget: true }),
+    make: () => ({ ...BASE, name: 'Fita vermelha', kind: 'flat', w: 500, d: 48, h: 0.2, color: '#d0202a', texture: 'tape', surface: 'film', roughness: 0.05, isTarget: true }),
   },
   {
     key: 'tape-logo',
     label: 'Fita branca com logo',
-    make: () => ({ ...BASE, name: 'Fita branca com logo', kind: 'flat', w: 500, d: 48, h: 0.2, color: '#f2f2ef', texture: 'tape-logo', gloss: 0.45, isTarget: true }),
+    make: () => ({ ...BASE, name: 'Fita branca com logo', kind: 'flat', w: 500, d: 48, h: 0.2, color: '#f2f2ef', texture: 'tape-logo', surface: 'film', roughness: 0.06, isTarget: true }),
   },
   {
     key: 'tape-clear-logo',
     label: 'Fita transparente com logo',
-    make: () => ({ ...BASE, name: 'Fita transparente com logo', kind: 'flat', w: 500, d: 48, h: 0.2, color: '#d42027', texture: 'tape-clear-logo', gloss: 1.5, isTarget: true }),
+    make: () => ({ ...BASE, name: 'Fita transparente com logo', kind: 'flat', w: 500, d: 48, h: 0.2, color: '#d42027', texture: 'tape-clear-logo', surface: 'film', roughness: 0.04, isTarget: true }),
   },
   {
     key: 'shirt',
     label: 'Operador (camiseta vermelha)',
-    make: () => ({ ...BASE, name: 'Operador (camiseta vermelha)', kind: 'box', w: 460, d: 240, h: 520, color: '#c3242c', texture: 'fabric', gloss: 0 }),
+    make: () => ({ ...BASE, name: 'Operador (camiseta vermelha)', kind: 'box', w: 460, d: 240, h: 520, color: '#c3242c', texture: 'fabric', surface: 'fabric', roughness: 1 }),
   },
   {
     key: 'block',
@@ -108,7 +108,7 @@ export function exampleScene() {
       shutter: 1 / 120,
       gainDb: 0,
       wbMode: 'manual-k',
-      wbKelvin: 5000,
+      wbKelvin: 6500, // luminárias de 6500 K ("luz fria", o padrão do varejo)
       wbGains: [1, 1, 1],
       colorMode: 'color',
       jpegQuality: 85,

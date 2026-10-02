@@ -127,14 +127,14 @@ test('emenda: fita cobrindo só metade aparece como trecho grande sem logo', () 
   assert.ok(prof.maxGapMm > 200, `maxGap = ${prof.maxGapMm}`);
 });
 
-import { lightSources, timeFactor, lightMix, dayVariation, normalizeLight, combinedFlicker, fixtureLook, makeFixture } from '../src/core/lighting.js';
+import { lightSources, timeFactor, lightMix, dayVariation, normalizeLight, combinedFlicker, makeFixture, resolveLuminaire, glarePoint } from '../src/core/lighting.js';
 
 test('luz: formato antigo vira luminária; luz contínua não muda de proporção com o obturador', () => {
   const L = normalizeLight({ type: 'difuso', lux: 600, kelvin: 5000, flicker: 0.02 });
   assert.equal(L.fixtures.length, 1);
   assert.equal(L.fixtures[0].model, 'panel');
   assert.equal(L.ambient.on, false);
-  near(lightSources(L)[0].lux, 600, 1e-6); // já descontado o difusor
+  assert.ok(L.fixtures[0].diffuser && lightSources(L)[0].lux > 100); // iluminância calculada pela posição
   const both = { ...L, ambient: { ...L.ambient, on: true } };
   near(lightMix(both, 1 / 120).shares.bench, lightMix(both, 1 / 1000).shares.bench, 1e-9);
 });
@@ -149,9 +149,9 @@ test('luz: LED pulsado + obturador curto corta o ambiente', () => {
 });
 
 test('luz: difusor troca reflexo forte por macio e perde luz; cobertura reduz a variação do dia', () => {
-  const bare = fixtureLook(makeFixture('bulb', { diffuser: false }));
-  const soft = fixtureLook(makeFixture('bulb', { diffuser: true }));
-  assert.ok(soft.specular < bare.specular && soft.lux < bare.lux);
+  const bare = resolveLuminaire(makeFixture('bulb', { diffuser: false }));
+  const soft = resolveLuminaire(makeFixture('bulb', { diffuser: true }));
+  assert.ok(soft.lumens < bare.lumens && soft.w > 2 * bare.r && soft.m === 1);
   const L = normalizeLight(null);
   L.ambient.on = true;
   const open = dayVariation(L, 1 / 120).spread, covered = dayVariation({ ...L, cover: 0.8 }, 1 / 120).spread;
@@ -206,4 +206,97 @@ test('sensor: toda câmera da lista resolve um sensor com valores plausíveis', 
     assert.ok(r.sensor.fullWellE > 3000, `${cam.id}: ${r.sensor.fullWellE}`);
   }
   assert.ok(sensorFor({ sensorType: null, widthPx: 1920 }, 5.184).pixelUm > 2.6);
+});
+
+import { peakIntensity, exponentFromAxial, fresnelF0, schlick, erf, emitters, illuminance, mirrorLuminance, domeLuminance } from '../src/core/photometry.js';
+import { surfaceOf } from '../src/core/materials.js';
+import { lightContext } from '../src/core/scene.js';
+
+test('fotometria: fonte Lambertiana pontual segue o inverso do quadrado e o cosseno', () => {
+  const lum = { shape: 'sphere', x: 0, y: 0, z: 1000, r: 1, lumens: 1000, m: 1 };
+  const ems = emitters(lum);
+  const I0 = peakIntensity(1000, 1); // Φ/π
+  near(I0, 1000 / Math.PI, 1e-9);
+  near(illuminance(ems, 0, 0, 0), I0, 1e-6); // 1 m no eixo
+  near(illuminance(ems, 0, 0, 500), I0 * 4, 1e-6); // metade da distância: 4×
+  // 45° fora do eixo: cos(θ) emissão × cos(θ) chegada / d²
+  const d2 = 2; // (1 m)² + (1 m)²
+  near(illuminance(ems, 1000, 0, 0), (I0 * Math.SQRT1_2 * Math.SQRT1_2) / d2, 1e-6);
+});
+
+test('fotometria: painel quadrado bate com a fórmula fechada da fonte de área', () => {
+  // painel Lambertiano 280 × 280 mm, 1680 lm, a 500 mm: E = 2L[a/√(a²+h²)·atan(b/√(a²+h²)) + …]
+  const lum = { shape: 'rect', x: 0, y: 0, z: 500, rot: 0, w: 280, d: 280, lumens: 1680, m: 1 };
+  const L = 1680 / (Math.PI * 0.28 * 0.28);
+  const a = 0.14, b = 0.14, h = 0.5;
+  const exact = 2 * L * ((a / Math.hypot(a, h)) * Math.atan(b / Math.hypot(a, h)) + (b / Math.hypot(b, h)) * Math.atan(a / Math.hypot(b, h)));
+  near(illuminance(emitters(lum), 0, 0, 0), exact, exact * 0.01);
+});
+
+test('fotometria: ring light Streamplify (1000 lm, 480 lux a 1 m) reproduz os 480 lux', () => {
+  near(exponentFromAxial(1000, 480, 1), 2.02, 0.01); // como fonte pontual
+  // com o anel de 26 cm, o expoente do catálogo reproduz os 480 lux a 1 m
+  const lum = resolveLuminaire(makeFixture('ring'), { x: 0, y: 0, z: 1020 });
+  near(illuminance(emitters(lum), 0, 0, 0), 480, 480 * 0.01);
+});
+
+test('fita BOPP: índice 1,50 reflete 4% na normal, mais em ângulo rasante', () => {
+  near(fresnelF0(1.5), 0.04, 1e-12);
+  near(schlick(0.04, 1), 0.04, 1e-12);
+  assert.ok(schlick(0.04, Math.cos((80 * Math.PI) / 180)) > 0.3);
+  assert.equal(surfaceOf({ surface: 'film' }).f0, fresnelF0(1.5));
+  // cena antiga: brilho 150% (fita transparente) vira filme quase espelho
+  const old = surfaceOf({ gloss: 1.5 });
+  assert.equal(old.key, 'film');
+  assert.ok(old.roughness < 0.05);
+  near(erf(1), 0.8427007929, 2e-7);
+});
+
+test('reflexo: espelho vê a luminância do painel; fora da imagem dele, nada', () => {
+  const lum = { shape: 'rect', x: 0, y: 0, z: 1000, rot: 0, w: 280, d: 280, lumens: 1680, m: 1 };
+  const L = 1680 / (Math.PI * 0.28 * 0.28);
+  // raio refletido para cima, direto no centro do painel, superfície lisa
+  near(mirrorLuminance(lum, 0, 0, 0, 0, 0, 1, 0.001), L, L * 1e-3);
+  // raio que sai 300 mm para o lado no plano do painel: fora
+  const r = Math.hypot(300, 1000);
+  near(mirrorLuminance(lum, 0, 0, 0, 300 / r, 0, 1000 / r, 0.001), 0, 1e-9);
+  // aspereza espalha: no centro cai, perto da borda (fora) aparece
+  const rough = mirrorLuminance(lum, 0, 0, 0, 0, 0, 1, 0.2);
+  assert.ok(rough < L && rough > 0.2 * L, `${rough}`);
+  const rb = Math.hypot(160, 1000);
+  assert.ok(mirrorLuminance(lum, 0, 0, 0, 160 / rb, 0, 1000 / rb, 0.2) > 0);
+});
+
+test('reflexo: o ponto de reflexo fica entre a câmera e a luminária, na proporção das alturas', () => {
+  const g = glarePoint({ x: 0, y: 300, z: 1100 }, { x: 0, y: 0, z: 1300 }, 360);
+  near(g.y, (300 * 940) / (940 + 740), 1e-9);
+  assert.equal(glarePoint({ x: 0, y: 0, z: 300 }, { x: 0, y: 0, z: 1300 }, 360), null);
+});
+
+test('domo: luminância uniforme dá E = π·L no centro, menos o furo da câmera', () => {
+  const lum = { shape: 'dome', x: 0, y: 0, z: 0, R: 450, hole: 40, lumens: 1500, m: 1 };
+  const L = domeLuminance(lum);
+  const E = illuminance(emitters(lum), 0, 0, 1);
+  near(E, Math.PI * L, Math.PI * L * 0.03);
+  // reflexo para cima no centro: cai no furo (escuro); inclinado: vê a cúpula
+  assert.ok(mirrorLuminance(lum, 0, 0, 1, 0, 0, 1, 0.01) < 0.05 * L);
+  const r = Math.hypot(0.3, 1);
+  near(mirrorLuminance(lum, 0, 0, 1, 0.3 / r, 0, 1 / r, 0.01), L, L * 0.01);
+});
+
+test('cena de exemplo: painel ao lado da câmera dá ~700 lux na fita e o reflexo fora dela', () => {
+  const scene = exampleScene();
+  const src = lightSources(scene.light, lightContext(scene));
+  assert.equal(src.length, 1);
+  assert.ok(src[0].lux > 500 && src[0].lux < 900, `${src[0].lux}`);
+  const g = glarePoint(src[0].lum, scene.camera, 360.2);
+  assert.ok(Math.abs(g.y) > 24 + 50, `reflexo em y = ${g.y}`); // fita de 48 mm em y = 0
+});
+
+test('luminária antiga (lux + offset) vira produto com fluxo e posição', () => {
+  const L = normalizeLight({ fixtures: [{ id: 'a', model: 'bar', lux: 900, offset: 0.2, on: true }] });
+  const f = L.fixtures[0];
+  assert.equal(f.lumens, 1460);
+  assert.equal(f.lux, undefined);
+  near(f.y, 500, 1e-9);
 });

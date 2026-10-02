@@ -4,7 +4,7 @@ import { createStore, normalizeScene, loadSaved, autosave } from './state.js';
 import { exampleScene } from './presets/objects.js';
 import { buildPanel } from './ui/panels.js';
 import { saveFile, readFileAsText } from './ui/io.js';
-import { drawTopView, drawFrontView, topToWorld, topViewport, frontViewport, lockViews } from './render/views.js';
+import { drawTopView, drawFrontView, topToWorld, topViewport, frontViewport, lockViews, sceneFixtures } from './render/views.js';
 import { renderCamera } from './render/camera.js';
 import { setAssetListener } from './render/textures.js';
 import { opticsMetrics, lightingMetrics, resolveHeights, drawOrder, resolveCamera, applyBoxVariant, boxInView } from './core/scene.js';
@@ -334,6 +334,15 @@ function start(saved) {
     const camPx = { x: topViewport.ox + (cam.x - topViewport.minX) * topViewport.scale, y: topViewport.oy + (cam.y - topViewport.minY) * topViewport.scale };
     if (Math.hypot(px * topViewport.dpr - camPx.x, py * topViewport.dpr - camPx.y) < 14 * topViewport.dpr) return { kind: 'camera' };
     const w = topToWorld(px, py);
+    const tol = (10 * topViewport.dpr) / topViewport.scale; // 10 px de folga, em mm
+    for (const { f, lum, model } of sceneFixtures(st.scene).reverse()) {
+      if (model.fixedToCamera) continue;
+      const dx = w.x - lum.x, dy = w.y - lum.y;
+      const c = Math.cos(-lum.rot), s = Math.sin(-lum.rot);
+      const lx = dx * c - dy * s, ly = dx * s + dy * c;
+      const hw = lum.shape === 'rect' ? lum.w / 2 : lum.r, hd = lum.shape === 'rect' ? lum.d / 2 : lum.r;
+      if (Math.abs(lx) <= hw + tol && Math.abs(ly) <= hd + tol) return { kind: 'fixture', id: f.id };
+    }
     const objs = drawOrder(resolveHeights(st.scene.objects)).reverse();
     for (const o of objs) {
       const c = Math.cos(-o.rot * DEG), s = Math.sin(-o.rot * DEG);
@@ -403,6 +412,30 @@ function start(saved) {
   }
   const sel = () => store.get().scene.objects.find((o) => o.id === store.get().ui.selectedId);
   const camLabel = () => { const c = store.get().scene.camera; return `Câmera: X ${c.x} · Y ${c.y} · altura ${c.z} mm`; };
+  const fixtureOf = (id) => store.get().scene.light.fixtures.find((x) => x.id === id);
+  const fixLabel = (id) => () => { const f = fixtureOf(id); return f ? `Luz: X ${f.x} · Y ${f.y} · altura ${f.z} mm` : ''; };
+  /** Arrasto de uma luminária: no plano (vista de cima) ou em altura/X (vista de frente). */
+  function dragFixture(id, k, axisLock) {
+    const f0 = { ...fixtureOf(id) };
+    let axis = null;
+    store.update((st) => { st.ui.selectedFixture = id; }, { camera: false });
+    return {
+      label: fixLabel(id),
+      move: (ax, ay, fine) => store.update((st) => {
+        const f = st.scene.light.fixtures.find((x) => x.id === id);
+        if (!f) return;
+        const step = fine ? 1 : 5;
+        if (!axisLock) {
+          f.x = snap(f0.x + ax * k, step);
+          f.y = snap(f0.y + ay * k, step);
+          return;
+        }
+        if (!axis && Math.hypot(ax, ay) > 6) axis = Math.abs(ay) >= Math.abs(ax) ? 'z' : 'x';
+        if (axis === 'z') f.z = Math.max(50, Math.min(4000, snap(f0.z - ay * k, fine ? 1 : 10)));
+        else if (axis === 'x') f.x = snap(f0.x + ax * k, step);
+      }),
+    };
+  }
   const objLabel = () => { const o = sel(); return o ? `${o.name}: X ${o.x} · Y ${o.y} mm` : ''; };
   // mm por pixel de tela, medido no início do arrasto (não muda se o layout mexer no meio)
   const mmPerPx = (v) => v.dpr / v.scale;
@@ -411,6 +444,7 @@ function start(saved) {
     const hit = hitTop(px, py);
     if (!hit) return null;
     const k = mmPerPx(topViewport);
+    if (hit.kind === 'fixture') return dragFixture(hit.id, k, false);
     if (hit.kind === 'camera') {
       const c0 = { ...store.get().scene.camera };
       return {
@@ -443,7 +477,16 @@ function start(saved) {
     const cam = store.get().scene.camera;
     const v = frontViewport;
     const cxp = v.ox + (cam.x - v.minX) * v.scale, czp = v.oy + (v.maxZ - cam.z) * v.scale;
-    if (Math.hypot(px * v.dpr - cxp, py * v.dpr - (czp - 12 * v.dpr)) > 26 * v.dpr) return null;
+    if (Math.hypot(px * v.dpr - cxp, py * v.dpr - (czp - 12 * v.dpr)) > 26 * v.dpr) {
+      // luminária: faixa na altura dela
+      for (const { f, lum, model } of sceneFixtures(store.get().scene)) {
+        if (model.fixedToCamera) continue;
+        const half = lum.shape === 'rect' ? (Math.abs(Math.cos(lum.rot)) * lum.w + Math.abs(Math.sin(lum.rot)) * lum.d) / 2 : lum.r;
+        const fx = v.ox + (lum.x - v.minX) * v.scale, fz = v.oy + (v.maxZ - lum.z) * v.scale;
+        if (Math.abs(px * v.dpr - fx) <= half * v.scale + 8 * v.dpr && Math.abs(py * v.dpr - fz) <= 10 * v.dpr) return dragFixture(f.id, mmPerPx(v), true);
+      }
+      return null;
+    }
     const c0 = { ...cam };
     const k = mmPerPx(v);
     const minZ = Math.max(...resolveHeights(store.get().scene.objects).filter((o) => o.visible).map((o) => o.z1), 0) + 60;

@@ -12,12 +12,12 @@ adicionado a partir de uma foto com as medidas reais.
 
 | Área | O que muda na tela |
 |---|---|
-| **Cena** | Objetos com medidas reais (mm): caixa, fita vermelha, fita branca com logo, fita transparente com logo (mais brilhante, sensível ao reflexo), prato da balança, operador, ou qualquer foto enviada. Empilhamento ("apoiado sobre"), posição, rotação, cor em RGB (na fita transparente, cor do logo), opacidade e brilho (reflexo). |
+| **Cena** | Objetos com medidas reais (mm): caixa, fita vermelha, fita branca com logo, fita transparente com logo (mais brilhante, sensível ao reflexo), prato da balança, operador, ou qualquer foto enviada. Empilhamento ("apoiado sobre"), posição, rotação, cor em RGB (na fita transparente, cor do logo), opacidade e superfície (filme BOPP, papelão, inox, tecido) com a aspereza do reflexo. |
 | **Caixas com câmera fixa** | Lista de tamanhos de caixa (P, M, G, GG e as que você criar). Trocar a caixa ajusta a fita e a posição (centralizada ou encostada no canto). "Comparar todas" gera a imagem de cada caixa com a mesma câmera e mostra se cabe inteira, quantos pixels a fita tem e se a detecção passa. |
 | **Enquadramento** | Vista de cima e vista de frente em escala, com o campo de visão no plano do alvo e na bancada, altura da câmera, faixa nítida (profundidade de campo) e quantos pixels a fita ocupa. |
 | **Câmera** | Modelos pesquisados (Logitech C920, Hikvision, Intelbras) com resolução, FOV, zoom motorizado e distorção. Câmera personalizada com dados do datasheet. |
 | **Imagem** | Exposição automática ou manual (obturador e ganho), balanço de branco (automático, por temperatura ou ganhos R/G/B), preto e branco (modo noite), ruído e compressão JPEG. |
-| **Luz** | Fontes somadas na mesma imagem. *Luzes da bancada*: lâmpada, light bar, ring light, painel de LED e domo, cada uma com ou sem difusor por cima (o difusor troca reflexo forte por macio e perde ~30% da luz), intensidade, cor, posição em relação à emenda e opção de LED pulsado sincronizado. *Luz do galpão*: lâmpadas (com flicker), teto com difusor e janelas, variando ao longo do dia. *Cobertura da bancada* bloqueia parte do galpão. Indicadores mostram a participação de cada uma na imagem e quanto a imagem varia ao longo do dia. |
+| **Luz** | Fontes somadas na mesma imagem. *Luzes da bancada*: produtos baratos reais (lâmpada bulbo 9 W, barra LED 60 cm, painel 24 W, ring light USB, domo), com fluxo em lúmens do fabricante, posição e altura em mm (arraste nas vistas), placa difusora opcional (reflexo maior e mais fraco, perde ~30% da luz), cor e opção de LED pulsado sincronizado. A iluminância no alvo é calculada, e a vista de cima marca onde cai o reflexo de cada luminária. *Luz do galpão*: lâmpadas (com flicker), teto com difusor e janelas, variando ao longo do dia. *Cobertura da bancada* bloqueia parte do galpão. Indicadores mostram a participação de cada uma na imagem e quanto a imagem varia ao longo do dia. |
 | **Detecção** | Dois modos, escolhidos automaticamente pelo alvo. *Área de cor* (fita colorida): cobertura da fita e falsos positivos. *Logo repetido* (fita transparente ou branca com logo): percorre a emenda inteira da caixa e conta os logos; reprova se houver um trecho sem logo maior que o limite (fita curta, faltando ou emenda aberta). Régua da emenda no veredito, máscara sobre a imagem e lupa com zoom de 2× a 16× (clique para fixar o ponto). |
 
 ## Rodar
@@ -45,6 +45,9 @@ src/
     optics.js           FOV, mm/pixel, projeção, profundidade de campo, distorção
     color.js            sRGB/linear, temperatura de cor, HSV, balanço de branco
     sensor.js           equação da câmera, saturação e ruído do pixel (dados do Sony IMX327)
+    photometry.js       luminárias como emissores: iluminância, reflexo espelhado, Fresnel
+    illumination.js     luz e reflexo por pixel, por superfície
+    materials.js        superfícies: Fresnel e aspereza (fita BOPP, papelão, inox)
     lighting.js         tipos de luz, dia, flicker, exposição
     detection.js        máscara por cor (com tabela de 32 768 cores), avaliação, veredito
     scene.js            empilhamento, câmera resolvida, indicadores
@@ -77,8 +80,9 @@ detecção. "Abrir cena" carrega de volta. Útil para guardar uma configuração
 
 ## Limitações
 
-Leia `docs/modelo.md`. Em resumo: a câmera sempre olha reto para baixo, a luz não projeta sombras, o
-reflexo é uma mancha aproximada. A exposição e o ruído seguem a equação da câmera e o datasheet do
+Leia `docs/modelo.md`. Em resumo: a câmera sempre olha reto para baixo e a luz não projeta sombras.
+As luminárias são produtos reais (fluxo e ângulo do fabricante) posicionadas em mm, e o reflexo na fita é
+a imagem espelhada delas (filme BOPP, ~4% de Fresnel). A exposição e o ruído seguem a equação da câmera e o datasheet do
 sensor Sony IMX327 (abertura, tamanho do pixel, obturador e ganho mudam a imagem como na câmera real),
 mas os sensores das câmeras da lista são estimados pelo formato óptico até serem medidos. Serve para
 comparar opções e explicar efeitos, não para substituir o teste com a câmera real.

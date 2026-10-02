@@ -3,9 +3,10 @@
 import { h, section, range, number, text, select, segmented, check, rgbColor, button } from './controls.js';
 import { OBJECT_PRESETS, makeObject, makeImageObject, newId } from '../presets/objects.js';
 import { CAMERAS, isZoom } from '../presets/cameras.js';
-import { SHUTTERS, shutterLabel, isFlickerSafe, FIXTURE_MODELS, makeFixture, fixtureLook, DIFFUSER_TRANSMISSION } from '../core/lighting.js';
+import { SHUTTERS, shutterLabel, isFlickerSafe, FIXTURE_MODELS, makeFixture, DIFFUSER_TRANSMISSION, lightSources } from '../core/lighting.js';
+import { SURFACES, surfaceOf } from '../core/materials.js';
 import { hexToRgb, rgbToHex } from '../core/color.js';
-import { resolveHeights, cameraModel, resolveCamera, detectionMode, applyBoxVariant, mainBox } from '../core/scene.js';
+import { resolveHeights, cameraModel, resolveCamera, detectionMode, applyBoxVariant, mainBox, lightContext } from '../core/scene.js';
 import { readImage } from './io.js';
 
 const fmtMm = (v) => `${Math.round(v)} mm`;
@@ -167,8 +168,12 @@ function scenePanel({ store, add, notify }) {
     : add(rgbColor({ label: o.texture === 'tape-clear-logo' ? 'Cor do logo' : 'Cor', get: () => sel()?.color ?? '#888888', set: (v) => mut((t) => { t.color = v; }), hexToRgb, rgbToHex })),
   add(range({ id: 'obj-op', label: 'Opacidade', min: 0.1, max: 1, step: 0.05, format: fmtPct, get: get('opacity'), set: (v) => mut((t) => { t.opacity = v; }),
     hint: 'Abaixo de 100% simula fita transparente.' })),
-  add(range({ id: 'obj-gloss', label: 'Brilho (reflexo)', min: 0, max: 2, step: 0.05, format: fmtPct, get: get('gloss'), set: (v) => mut((t) => { t.gloss = v; }),
-    hint: 'Papelão ~5%, fita branca ~45%, fita vermelha ~70%, fita transparente ~150%: o filme reflete a luz como espelho e pode apagar o logo.' })),
+  add(select({ id: 'obj-surface', label: 'Superfície (reflexo)', options: Object.entries(SURFACES).map(([k, m]) => ({ value: k, label: m.label })),
+    get: () => surfaceOf(sel() || {}).key,
+    set: (v) => mut((t) => { t.surface = v; t.roughness = SURFACES[v].roughness; }, true) })),
+  add(range({ id: 'obj-rough', label: 'Aspereza do reflexo', min: 0.01, max: 1, step: 0.01, get: () => surfaceOf(sel() || {}).roughness,
+    set: (v) => mut((t) => { t.surface = surfaceOf(t).key; t.roughness = v; }), format: (v) => `${(v * 180 / Math.PI).toFixed(0)}°`,
+    hint: 'Filme liso (fita): reflete a luminária como espelho, ~4% da luz dela. Papelão: reflexo espalhado, quase some.' })),
   add(check({ id: 'obj-target', label: 'É o alvo da detecção (a fita)', get: get('isTarget'), set: (v) => mut((t) => { t.isTarget = v; }, true) })),
   h('div', { class: 'row-actions' },
     button('Duplicar', () => {
@@ -320,6 +325,7 @@ function lightPanel({ store, add }) {
   const flickerPresets = [
     { value: '0', label: 'Sem oscilação' },
     { value: '0.02', label: 'LED de qualidade (2%)' },
+    { value: '0.1', label: 'LED comum (10%)' },
     { value: '0.15', label: 'Fluorescente (15%)' },
     { value: '0.35', label: 'LED barato (35%)' },
   ];
@@ -348,26 +354,41 @@ function lightPanel({ store, add }) {
 
   // Luminárias da bancada
   const modelOpts = Object.entries(FIXTURE_MODELS).map(([k, m]) => ({ value: k, label: m.label }));
+  const ctx = lightContext(store.get().scene);
+  const benchLux = new Map(lightSources(L(), ctx).filter((s) => s.group === 'bench').map((s) => [s.id, s.lux]));
   const cards = L().fixtures.map((f, idx) => {
     const F = () => L().fixtures.find((x) => x.id === f.id) || f;
     const mut = (fn, structural = false) => up((l) => { const t = l.fixtures.find((x) => x.id === f.id); if (t) fn(t); }, structural);
     const model = FIXTURE_MODELS[f.model];
-    const look = fixtureLook(f);
+    const lux = benchLux.get(f.id);
+    const productLine = [model.product, `${model.lumens} lm`, model.price ? brl(model.price) : null, model.store].filter(Boolean).join(' · ');
     return h('div', { class: 'fixture' + (f.on ? '' : ' is-off') },
       h('div', { class: 'fixture-head' },
         add(check({ id: `fx-on-${idx}`, label: `Luz ${idx + 1}`, get: () => F().on, set: (v) => mut((t) => { t.on = v; }, true) })),
         button('Remover', () => up((l) => { l.fixtures = l.fixtures.filter((x) => x.id !== f.id); }, true), 'btn-quiet btn-sm')),
       add(select({ id: `fx-model-${idx}`, label: 'Modelo', options: modelOpts, get: () => F().model,
-        set: (v) => mut((t) => { const m = FIXTURE_MODELS[v]; t.model = v; t.lux = m.lux; t.kelvin = m.kelvin; t.flicker = m.flicker; }, true) })),
+        set: (v) => mut((t) => { Object.assign(t, makeFixture(v, { id: t.id, on: t.on, x: t.x, y: t.y, ...(v === 'dome' || t.model === 'dome' ? {} : { z: t.z }) })); }, true) })),
+      h('p', { class: 'hint', text: productLine }),
       h('p', { class: 'hint', text: model.hint }),
-      model.alwaysDiffuse ? null : add(check({ id: `fx-diff-${idx}`, label: `Difusor por cima (perde ${Math.round((1 - DIFFUSER_TRANSMISSION) * 100)}% da luz)`,
+      model.estimated?.length ? h('p', { class: 'note', text: `Estimado: ${model.estimated.join(', ')}. Fonte: ${model.source}.` }) : h('p', { class: 'note', text: `Fonte: ${model.source}.` }),
+      f.on ? h('p', { class: 'note' }, h('strong', { text: `${Math.round(lux ?? 0)} lux no alvo` }), ' (calculado pela posição e pelo fluxo)') : null,
+      model.alwaysDiffuse || model.fixedToCamera ? null : add(check({ id: `fx-diff-${idx}`,
+        label: `Placa difusora leitosa embaixo (passa ${Math.round(DIFFUSER_TRANSMISSION * 100)}% da luz)`,
+        hint: 'Aumenta a área que brilha: o reflexo fica maior e bem mais fraco.',
         get: () => F().diffuser, set: (v) => mut((t) => { t.diffuser = v; }, true) })),
-      add(range({ id: `fx-lux-${idx}`, label: 'Intensidade da luminária', min: 50, max: 5000, step: 10, get: () => F().lux, set: (v) => mut((t) => { t.lux = v; }),
-        format: (v) => `${v} lux${look.diffused && !model.alwaysDiffuse ? ` → ${Math.round(v * DIFFUSER_TRANSMISSION)} na bancada` : ''}` })),
+      model.fixedToCamera && f.model !== 'dome' ? h('p', { class: 'hint', text: 'Presa na câmera: acompanha a posição dela.' }) : null,
+      f.model === 'dome' ? h('div', { class: 'grid-2' },
+        add(number({ id: `fx-z-${idx}`, label: 'Altura da borda', unit: 'mm', min: 0, max: 3000, get: () => F().z, set: (v) => mut((t) => { t.z = v; }) })),
+        add(number({ id: `fx-rad-${idx}`, label: 'Raio', unit: 'mm', min: 100, max: 1500, get: () => F().radius, set: (v) => mut((t) => { t.radius = v; }) }))) : null,
+      model.fixedToCamera ? null : h('div', { class: 'grid-3' },
+        add(number({ id: `fx-x-${idx}`, label: 'X', unit: 'mm', min: -5000, max: 5000, get: () => F().x, set: (v) => mut((t) => { t.x = v; }) })),
+        add(number({ id: `fx-y-${idx}`, label: 'Y', unit: 'mm', min: -5000, max: 5000, get: () => F().y, set: (v) => mut((t) => { t.y = v; }) })),
+        add(number({ id: `fx-z-${idx}`, label: 'Altura', unit: 'mm', min: 50, max: 4000, get: () => F().z, set: (v) => mut((t) => { t.z = v; }) }))),
+      model.fixedToCamera || model.shape === 'sphere' ? null : add(range({ id: `fx-rot-${idx}`, label: 'Rotação', min: -90, max: 90, step: 1,
+        get: () => F().rot, set: (v) => mut((t) => { t.rot = v; }), format: (v) => `${v}°` })),
+      add(range({ id: `fx-lm-${idx}`, label: 'Fluxo luminoso', min: 100, max: 6000, step: 10, get: () => F().lumens, set: (v) => mut((t) => { t.lumens = v; }),
+        format: (v) => `${v} lm`, hint: 'Do datasheet. Duas luminárias iguais lado a lado: use uma com o dobro, ou adicione outra.' })),
       add(range({ id: `fx-k-${idx}`, label: 'Temperatura de cor', min: 2700, max: 6500, step: 50, get: () => F().kelvin, set: (v) => mut((t) => { t.kelvin = v; }), format: (v) => `${v} K` })),
-      model.fixedToCamera ? null : add(range({ id: `fx-off-${idx}`, label: 'Posição em relação à emenda', min: -0.5, max: 0.5, step: 0.01, get: () => F().offset, set: (v) => mut((t) => { t.offset = v; }),
-        format: (v) => (Math.abs(v) < 0.005 ? 'sobre a emenda (junto da câmera)' : `${v > 0 ? 'para frente' : 'para trás'} ${Math.round(Math.abs(v) * 100)}%`),
-        hint: 'Luz junto da câmera reflete direto na lente. Afastar para frente ou para trás tira o reflexo de cima da fita.' })),
       F().strobe ? null : flickerSelect(`fx-flk-${idx}`, () => F().flicker, (v) => mut((t) => { t.flicker = v; })),
       add(check({ id: `fx-strobe-${idx}`, label: 'Pulsada (estroboscópica), sincronizada com a câmera',
         hint: 'O LED acende só durante a foto, mais forte. Com obturador curto, a luz do galpão quase some. Exige câmera com saída de disparo.',
@@ -386,7 +407,9 @@ function lightPanel({ store, add }) {
     modelOpts.map((o) => h('option', { value: o.value, text: o.label })));
   addSel.addEventListener('change', () => {
     if (!addSel.value) return;
-    const fx = makeFixture(addSel.value);
+    const c = store.get().scene.camera;
+    // nova luminária ao lado da câmera, um pouco abaixo dela
+    const fx = makeFixture(addSel.value, { x: c.x, y: c.y + 300, z: Math.max(200, c.z - 200) });
     up((l) => { l.fixtures.push(fx); }, true);
   });
 

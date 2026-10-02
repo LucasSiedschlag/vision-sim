@@ -1,18 +1,19 @@
 // Imagem simulada da câmera: geometria em perspectiva → luz → exposição → balanço de branco
 // → ruído → modo de cor → compressão JPEG → detecção.
 
-import { resolveHeights, drawOrder, resolveCamera, effectiveLight, detectionParams, detectionMode } from '../core/scene.js';
+import { resolveHeights, drawOrder, resolveCamera, effectiveLight, detectionParams, detectionMode, lightContext } from '../core/scene.js';
 import { project, planeScale, rectCorners, distortionMap, DEG } from '../core/optics.js';
 import { SRGB_TO_LINEAR, LINEAR_TO_SRGB8, illuminantRgb, wbGainsForKelvin, grayWorldGains } from '../core/color.js';
 import { lightSources, timeFactor, flickerAverage } from '../core/lighting.js';
 import { whiteSignalPerLuxS, snrDb } from '../core/sensor.js';
+import { computeLightFields } from '../core/illumination.js';
 import { colorLut, colorMaskLut, evaluate, verdict, profileBand, analyzeProfile, verdictLogo } from '../core/detection.js';
 import { topTexture, sideColor, inkTexture } from './textures.js';
 
 const BENCH = '#62676b';
 const canvases = {};
 let mapCache = { key: '', map: null };
-const fieldCache = new Map();
+let fieldCache = { key: '', fields: null };
 let lutCache = { key: '', lut: null };
 
 // Ruído pré-calculado: soma de 3 uniformes, desvio padrão 1 (quase gaussiana)
@@ -85,8 +86,7 @@ function drawGeometry(ctx, objs, cam, mode, ink = null) {
     if (mode === 'color') {
       ctx.drawImage(topTexture(o), -o.w / 2, -o.d / 2, o.w, o.d);
     } else {
-      // brilho vai de 0 a 2 (filme transparente reflete mais); guardado pela metade no canal R
-      ctx.fillStyle = `rgb(${Math.round(Math.min(2, o.gloss) * 127.5)},${o.isTarget ? 255 : 0},0)`;
+      ctx.fillStyle = `rgb(0,${o.isTarget ? 255 : 0},0)`;
       ctx.fillRect(-o.w / 2, -o.d / 2, o.w, o.d);
       if (o.isTarget && ink) {
         ctx.globalCompositeOperation = 'lighter';
@@ -99,55 +99,14 @@ function drawGeometry(ctx, objs, cam, mode, ink = null) {
   ctx.globalAlpha = 1;
 }
 
-/**
- * Forma de uma fonte na imagem, por pixel (em cache):
- * field = queda de luz a partir do centro da fonte e lado mais claro (janelas); null = uniforme.
- * hot = mancha de reflexo (gaussiana elíptica, ou anel no caso do ring light).
- */
-function lightField(w, h, src) {
-  const key = `${w}x${h}:${src.falloff}:${src.gradient}:${src.center}:${src.hot}:${src.ring}`;
-  if (fieldCache.has(key)) return fieldCache.get(key);
-  const R = Math.hypot(w, h) / 2;
-  const cx = w * src.center[0], cy = h * src.center[1];
-  let field = null;
-  if (src.falloff || src.gradient) {
-    field = new Float32Array(w * h);
-    const N = 1024, fall = new Float32Array(N + 1);
-    for (let i = 0; i <= N; i++) fall[i] = 1 / Math.pow(1 + src.falloff * (i / N) * 2.2, 1.5);
-    const invR2 = N / (R * R);
-    for (let y = 0; y < h; y++) {
-      const dy2 = (y - cy) ** 2;
-      for (let x = 0; x < w; x++) {
-        const dx = x - cx;
-        const t = Math.min(N, ((dx * dx + dy2) * invR2) | 0);
-        field[y * w + x] = fall[t] * (1 + (src.gradient * (x - w / 2)) / R);
-      }
-    }
+/** Mesmo remapeamento da distorção para um mapa de luz (Float32, um valor por pixel). */
+function remapF32(src, map) {
+  const out = new Float32Array(map.length);
+  for (let i = 0; i < map.length; i++) {
+    const m = map[i];
+    out[i] = m >= 0 ? src[m] : 0;
   }
-  const hot = new Float32Array(w * h);
-  if (src.ring) {
-    const r0 = src.ring[0] * R, rw2 = (src.ring[1] * R) ** 2;
-    for (let y = 0; y < h; y++) {
-      for (let x = 0; x < w; x++) {
-        const d = Math.hypot(x - cx, y - cy) - r0;
-        hot[y * w + x] = Math.exp(-(d * d) / rw2);
-      }
-    }
-  } else {
-    // gaussiana elíptica é separável: exp(-dx²/rx²) · exp(-dy²/ry²)
-    const rx2 = (src.hot[0] * R) ** 2, ry2 = (src.hot[1] * R) ** 2;
-    const gx = new Float32Array(w), gy = new Float32Array(h);
-    for (let x = 0; x < w; x++) gx[x] = Math.exp(-((x - cx) ** 2) / rx2);
-    for (let y = 0; y < h; y++) gy[y] = Math.exp(-((y - cy) ** 2) / ry2);
-    for (let y = 0; y < h; y++) {
-      const o = y * w, g = gy[y];
-      for (let x = 0; x < w; x++) hot[o + x] = gx[x] * g;
-    }
-  }
-  const entry = { field, hot };
-  if (fieldCache.size > 10) fieldCache.delete(fieldCache.keys().next().value);
-  fieldCache.set(key, entry);
-  return entry;
+  return out;
 }
 
 function remap32(src, map) {
@@ -183,37 +142,60 @@ export async function renderCamera(scene, captureSeed = 1) {
   mark('desenho');
 
   let rgba = rctx.getImageData(0, 0, W, H).data;
-  let aux = dctx.getImageData(0, 0, W, H).data; // R = brilho, G = alvo
+  let aux = dctx.getImageData(0, 0, W, H).data; // G = alvo, B = tinta da cor procurada
 
-  // Distorção da lente (barril)
+  // Luz: soma de todas as fontes ligadas (galpão e luminárias da bancada). Iluminância e reflexo de
+  // cada luminária calculados por pixel na imagem ideal (src/core/illumination.js), em cache.
+  const lsrc = lightSources(scene.light, lightContext(scene));
+  const fkey = JSON.stringify([W, H, cam.x, cam.y, cam.z, cam.fpx,
+    objs.map((o) => [o.x, o.y, o.z1, o.w, o.d, o.rot, o.surface, o.roughness, o.gloss]),
+    lsrc.map((s) => [s.group, s.lux, s.gradient, s.lum])]);
+  if (fieldCache.key !== fkey) fieldCache = { key: fkey, fields: computeLightFields({ cam, W, H, objs, sources: lsrc }), distorted: new Map() };
+  let fields = fieldCache.fields;
+  mark('luz por pixel');
+
+  // Distorção da lente (barril): imagem, dados e mapas de luz passam pelo mesmo remapeamento
   const k1 = scene.camera.distortion ? Math.round(cam.lens.k1 * 200) / 200 : 0;
   if (Math.abs(k1) > 1e-3) {
     const key = `${W}x${H}:${k1}`;
     if (mapCache.key !== key) mapCache = { key, map: distortionMap(W, H, k1) };
     rgba = remap32(rgba, mapCache.map);
     aux = remap32(aux, mapCache.map);
+    if (!fieldCache.distorted.has(key)) {
+      const r = (a) => (a ? remapF32(a, mapCache.map) : null);
+      const shared = new Map(); // o reflexo do galpão é o mesmo mapa para as três fontes
+      const once = (a) => { if (!a) return null; if (!shared.has(a)) shared.set(a, r(a)); return shared.get(a); };
+      fieldCache.distorted.set(key, fields.map((f) => ({ field: r(f.field), hot: once(f.hot) })));
+    }
+    fields = fieldCache.distorted.get(key);
   }
   mark('distorção');
 
-  // Luz: soma de todas as fontes ligadas (galpão e luminárias da bancada)
-  const sources = lightSources(scene.light).map((src) => ({ ...src, ill: illuminantRgb(src.kelvin), ...lightField(W, H, src) }));
+  const sources = lsrc.map((src, i) => ({ ...src, lux: Math.max(src.lux, 1e-3), ill: illuminantRgb(src.kelvin), ...fields[i] }));
   const LIN = SRGB_TO_LINEAR;
 
   // Estatísticas do sinal bruto (amostradas), por fonte, para exposição e balanço automáticos.
   // m[c] = média do canal c por segundo de exposição, em fração da saturação do pixel (0 dB).
   // kWhite: equação da câmera com a abertura da lente e a saturação do sensor (src/core/sensor.js).
   const kWhite = whiteSignalPerLuxS(cam.sensor, cam.lens.aperture);
+  // Medição central ponderada (o padrão das câmeras IP): o centro pesa mais que as bordas, que
+  // costumam ser bancada escura com menos luz.
+  const meterW = new Float32Array(Math.ceil(N / 17));
+  for (let j = 0, q = 0; j < N; j += 17, q++) {
+    const dx = ((j % W) - W / 2) / (W / 2), dy = (((j / W) | 0) - H / 2) / (H / 2);
+    meterW[q] = Math.exp(-(dx * dx + dy * dy) / (2 * 0.35 * 0.35));
+  }
   for (const src of sources) {
     const base = src.lux * kWhite;
     let r = 0, g = 0, b = 0, n = 0;
-    for (let j = 0; j < N; j += 17) {
-      const i = j << 2;
+    for (let j = 0, q = 0; j < N; j += 17, q++) {
+      const i = j << 2, w = meterW[q];
       const f = src.field ? src.field[j] : 1;
-      const sp = (aux[i] / 127.5) * src.specular * src.hot[j];
-      r += (LIN[rgba[i]] * f + sp);
-      g += (LIN[rgba[i + 1]] * f + sp);
-      b += (LIN[rgba[i + 2]] * f + sp);
-      n++;
+      const sp = src.hot ? src.hot[j] : 0;
+      r += w * (LIN[rgba[i]] * f + sp);
+      g += w * (LIN[rgba[i + 1]] * f + sp);
+      b += w * (LIN[rgba[i + 2]] * f + sp);
+      n += w;
     }
     src.m = [(r / n) * base * src.ill[0], (g / n) * base * src.ill[1], (b / n) * base * src.ill[2]];
   }
@@ -257,7 +239,7 @@ export async function renderCamera(scene, captureSeed = 1) {
   const phase = rnd() * Math.PI * 2;
   const lineTime = 1 / 30 / H;
   const S = sources.length;
-  // coeficientes por fonte: difuso (kd) e reflexo (ks), por canal, já com exposição e balanço
+  // coeficiente por fonte e canal: iluminância de referência × exposição × cor da luz × balanço
   const kd = sources.map((src) => {
     const k = src.lux * kWhite * timeFactor(src, shutter) * gainLin * 4095;
     return [k * src.ill[0] * wb[0], k * src.ill[1] * wb[1], k * src.ill[2] * wb[2]];
@@ -267,8 +249,7 @@ export async function renderCamera(scene, captureSeed = 1) {
     for (let y = 0; y < H; y++) r[y] = src.strobe ? 1 : flickerAverage(shutter, phase + 2 * Math.PI * 120 * y * lineTime, src.flicker);
     return r;
   });
-  const fields = sources.map((src) => src.field), hots = sources.map((src) => src.hot);
-  const specs = sources.map((src) => src.specular / 127.5);
+  const fieldMaps = sources.map((src) => src.field), hots = sources.map((src) => src.hot);
   mark('luz');
 
   // Pixels
@@ -285,26 +266,24 @@ export async function renderCamera(scene, captureSeed = 1) {
   let clipped = 0;
   let ni = (rnd() * 65536) | 0;
   const dR = new Float64Array(S), dG = new Float64Array(S), dB = new Float64Array(S);
-  const sR = new Float64Array(S), sG = new Float64Array(S), sB = new Float64Array(S);
   for (let y = 0, j = 0; y < H; y++) {
     for (let k = 0; k < S; k++) {
       const rf = rows[k][y];
       dR[k] = kd[k][0] * rf; dG[k] = kd[k][1] * rf; dB[k] = kd[k][2] * rf;
-      sR[k] = dR[k] * specs[k]; sG[k] = dG[k] * specs[k]; sB[k] = dB[k] * specs[k];
     }
     for (let x = 0; x < W; x++, j++) {
       const i = j << 2;
+      // difuso: refletância × iluminância; reflexo: cor da luz × iluminância equivalente do espelho
       let ar = 0, ag = 0, ab = 0, br = 0, bg = 0, bb = 0;
       for (let k = 0; k < S; k++) {
-        const f = fields[k] ? fields[k][j] : 1;
+        const f = fieldMaps[k] ? fieldMaps[k][j] : 1;
         ar += dR[k] * f; ag += dG[k] * f; ab += dB[k] * f;
-        const hh = hots[k][j];
-        br += sR[k] * hh; bg += sG[k] * hh; bb += sB[k] * hh;
+        const hh = hots[k] ? hots[k][j] : 0;
+        br += dR[k] * hh; bg += dG[k] * hh; bb += dB[k] * hh;
       }
-      const gl = aux[i];
-      let r = LIN[rgba[i]] * ar + gl * br;
-      let g = LIN[rgba[i + 1]] * ag + gl * bg;
-      let b = LIN[rgba[i + 2]] * ab + gl * bb;
+      let r = LIN[rgba[i]] * ar + br;
+      let g = LIN[rgba[i + 1]] * ag + bg;
+      let b = LIN[rgba[i + 2]] * ab + bb;
       if (noisy) {
         r += NOISE[ni] * Math.sqrt(naR * (r > 0 ? r : 0) + nbR); ni = (ni + 1) & 65535;
         g += NOISE[ni] * Math.sqrt(naG * (g > 0 ? g : 0) + nbG); ni = (ni + 1) & 65535;
@@ -409,6 +388,6 @@ export async function renderCamera(scene, captureSeed = 1) {
     },
     sensor: cam.sensor,
     wb,
-    light: effectiveLight(scene.light),
+    light: effectiveLight(scene),
   };
 }

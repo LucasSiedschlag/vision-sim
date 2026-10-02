@@ -1,46 +1,63 @@
-// Iluminação: tipos de luz, variação ao longo do dia, cintilação (flicker) e exposição.
+// Iluminação: luminárias (produtos reais), luz do galpão ao longo do dia, cintilação (flicker) e exposição.
+
+import { emitters, illuminance } from './photometry.js';
 
 /**
- * Luminárias da bancada. Cada modelo tem dois comportamentos: sem difusor (luz dura, reflexo forte e
- * pequeno) e com difusor por cima (luz macia, reflexo fraco e espalhado, perde ~30% da luz).
- * hot: tamanho da mancha de reflexo [x, y] em fração da meia-diagonal da imagem.
- * ring: reflexo em anel (ring light em volta da lente). falloff: escurecimento nas bordas.
+ * Luminárias da bancada: produtos baratos encontrados no varejo brasileiro (consulta em 02/10/2026),
+ * com os dados fotométricos do fabricante. `estimated` lista o que não veio do datasheet.
+ * shape: forma emissora (ver src/core/photometry.js). size: dimensões da parte que emite luz (mm).
+ * m: expoente da distribuição cosᵐ (0 = 180°, 1 = 120° Lambertiana, maior = feixe mais fechado).
  */
 export const FIXTURE_MODELS = {
   bulb: {
-    label: 'Lâmpada (bulbo LED)', lux: 800, kelvin: 3000, flicker: 0.1,
-    hint: 'Lâmpada comum sobre a bancada. Sem difusor, faz um ponto de reflexo forte na fita.',
-    bare: { specular: 1.6, hot: [0.12, 0.12], falloff: 0.9 },
-    diffused: { specular: 0.35, hot: [0.35, 0.35], falloff: 0.45 },
+    label: 'Lâmpada LED bulbo 9 W',
+    product: 'Philips LEDbulb A60 9 W 6500 K E27', price: null, store: 'Telhanorte',
+    lumens: 806, kelvin: 6500, flicker: 0.02, shape: 'sphere', size: [60, 60], m: 0,
+    source: 'Signify 929002038012: 806 lm, feixe de 180°, Ø 61 mm',
+    estimated: ['flicker'],
+    hint: 'Lâmpada comum num soquete sobre a bancada. Pequena e muito brilhante: na fita, o reflexo é um ponto que estoura.',
   },
   bar: {
-    label: 'Light bar (barra de LED)', lux: 900, kelvin: 5600, flicker: 0.03,
-    hint: 'Barra linear paralela à fita. O reflexo vira uma faixa sobre a fita; afastar a barra para frente ou para trás tira o reflexo de cima dela.',
-    bare: { specular: 1.1, hot: [0.42, 0.05], falloff: 0.5 },
-    diffused: { specular: 0.22, hot: [0.55, 0.18], falloff: 0.25 },
-  },
-  ring: {
-    label: 'Ring light (anel na lente)', lux: 700, kelvin: 5600, flicker: 0.03, fixedToCamera: true,
-    hint: 'Anel de LED em volta da câmera. Ilumina por igual, mas reflete um anel em superfícies brilhantes.',
-    bare: { specular: 1.2, ring: [0.13, 0.03], falloff: 0.35 },
-    diffused: { specular: 0.1, ring: [0.16, 0.12], falloff: 0.2 },
+    label: 'Luminária linear LED 60 cm 16 W',
+    product: 'Avant Hummer 60 cm 16 W 6500 K', price: 25.47, store: 'varejo online (Pix)',
+    lumens: 1460, kelvin: 6500, flicker: 0.35, shape: 'rect', size: [600, 30], m: 1,
+    source: 'Avant: 1460 lm. Largura da parte acesa estimada.',
+    estimated: ['size', 'flicker', 'm'],
+    hint: 'Barra paralela à fita. O reflexo é uma faixa; tirar a barra da linha entre a câmera e a fita tira o reflexo de cima dela.',
   },
   panel: {
-    label: 'Painel de LED', lux: 860, kelvin: 5000, flicker: 0.02,
-    hint: 'Painel plano. Com difusor e cobertura é a luz mais estável e com menos reflexo.',
-    bare: { specular: 0.5, hot: [0.6, 0.6], falloff: 0.1 },
-    diffused: { specular: 0.06, hot: [0.9, 0.9], falloff: 0 },
+    label: 'Painel LED de sobrepor 24 W (28 × 28 cm)',
+    product: 'Taschibra painel quadrado sobrepor 24 W 6500 K', price: null, store: 'Telhanorte',
+    lumens: 1680, kelvin: 6500, flicker: 0.1, shape: 'rect', size: [280, 280], m: 1,
+    source: 'Taschibra: 1680 lm (versão 3000 K), feixe de 120°, 28 × 28 cm',
+    estimated: ['lumens', 'flicker'],
+    hint: 'Painel com tampa leitosa: luz mais macia que a lâmpada. Ainda assim aparece como um quadrado claro refletido na fita.',
+  },
+  ring: {
+    label: 'Ring light 26 cm (USB)',
+    product: 'Streamplify Light 10', price: 149.99, store: 'Pichau',
+    lumens: 1000, kelvin: 5600, flicker: 0, shape: 'ring', size: [260, 220], m: 2.13, fixedToCamera: true,
+    source: 'Streamplify: 1000 lm, 480 lux a 1 m (m = 2,13 reproduz isso com o anel de 26 cm), 3000–6000 K, USB 5 V (corrente contínua)',
+    estimated: ['size'],
+    hint: 'Anel em volta da lente. Ilumina por igual, mas numa superfície brilhante reflete um anel no meio da imagem.',
   },
   dome: {
-    label: 'Domo difuso', lux: 860, kelvin: 5600, flicker: 0.02, alwaysDiffuse: true,
-    hint: 'Cúpula que espalha a luz por todos os lados. Praticamente elimina reflexo, mas precisa envolver a área da caixa.',
-    bare: { specular: 0.02, hot: [1.2, 1.2], falloff: 0 },
-    diffused: { specular: 0.02, hot: [1.2, 1.2], falloff: 0 },
+    label: 'Domo difuso (montagem própria, Ø 90 cm)',
+    product: 'Cúpula branca fosca com fita LED por dentro', price: null, store: '',
+    lumens: 1500, kelvin: 6500, flicker: 0.02, shape: 'dome', size: [900, 40], m: 1, fixedToCamera: true, alwaysDiffuse: true,
+    source: 'Montagem própria: valores estimados',
+    estimated: ['lumens', 'flicker', 'size'],
+    hint: 'Cúpula que cobre a caixa e ilumina de todos os lados. Quase sem reflexo; só o furo da câmera aparece como um ponto escuro refletido.',
   },
 };
 
-/** Fração da luz que atravessa o difusor. */
+/** Fração da luz que atravessa a placa difusora leitosa (acrílico opalino). Estimada. */
 export const DIFFUSER_TRANSMISSION = 0.7;
+/** Placa difusora: margem em volta da luminária e distância abaixo dela (mm). */
+const DIFFUSER_MARGIN = 100, DIFFUSER_DROP = 50;
+
+/** Posição padrão das luminárias soltas: ao lado da câmera, um pouco abaixo dela. */
+const DEFAULT_POSITION = { x: 0, y: 300, z: 1100, rot: 0 };
 
 let fixtureCount = 0;
 export function makeFixture(model = 'panel', overrides = {}) {
@@ -48,9 +65,11 @@ export function makeFixture(model = 'panel', overrides = {}) {
   fixtureCount += 1;
   return {
     id: `luz-${Date.now().toString(36)}-${fixtureCount}`,
-    model, on: true, diffuser: true,
-    lux: m.lux, kelvin: m.kelvin, flicker: m.flicker,
-    offset: 0, strobe: false, pulse: 1 / 1000, overdrive: 4,
+    model, on: true, diffuser: false,
+    lumens: m.lumens, kelvin: m.kelvin, flicker: m.flicker,
+    ...DEFAULT_POSITION,
+    ...(model === 'dome' ? { z: 60, radius: m.size[0] / 2 } : {}),
+    strobe: false, pulse: 1 / 1000, overdrive: 4,
     ...overrides,
   };
 }
@@ -61,13 +80,13 @@ export function defaultLight() {
   return { ambient: { ...DEFAULT_AMBIENT }, fixtures: [makeFixture('panel', { id: 'luz-painel' })], cover: 0 };
 }
 
-/** Converte o formato antigo ({ type, lux, kelvin, ... }) e completa campos que faltarem. */
+/** Converte formatos antigos e completa campos que faltarem. */
 export function normalizeLight(raw) {
   if (!raw) return defaultLight();
   if (raw.fixtures || raw.ambient) {
     return {
       ambient: { ...DEFAULT_AMBIENT, ...(raw.ambient || {}) },
-      fixtures: (raw.fixtures || []).map((f) => ({ ...makeFixture(f.model), ...f })),
+      fixtures: (raw.fixtures || []).map(normalizeFixture),
       cover: raw.cover ?? 0,
     };
   }
@@ -75,18 +94,65 @@ export function normalizeLight(raw) {
   if (raw.type === 'ambiente') {
     Object.assign(L.ambient, { on: true, lamps: raw.lux ?? 600, hour: raw.hour ?? 12, skylight: raw.skylight ?? 220, windows: raw.windows ?? 120 });
   } else if (raw.type === 'pontual') {
-    L.fixtures.push(makeFixture('bulb', { diffuser: false, lux: raw.lux ?? 800, kelvin: raw.kelvin ?? 3000, flicker: raw.flicker ?? 0.1 }));
+    L.fixtures.push(makeFixture('bulb', { kelvin: raw.kelvin ?? 3000, flicker: raw.flicker ?? 0.1 }));
   } else {
-    L.fixtures.push(makeFixture('panel', { lux: (raw.lux ?? 600) / DIFFUSER_TRANSMISSION, kelvin: raw.kelvin ?? 5000, flicker: raw.flicker ?? 0.02 }));
+    L.fixtures.push(makeFixture('panel', { diffuser: true, kelvin: raw.kelvin ?? 5000, flicker: raw.flicker ?? 0.02 }));
   }
   return L;
 }
 
-/** Comportamento óptico de uma luminária (com ou sem difusor). */
-export function fixtureLook(f) {
+/**
+ * Luminária salva antes da fotometria tinha `lux` (na bancada) e `offset` (fração da imagem).
+ * Vira o produto do mesmo tipo na posição padrão; o deslocamento vira mm na direção da fita.
+ */
+function normalizeFixture(f) {
+  const base = makeFixture(FIXTURE_MODELS[f.model] ? f.model : 'panel');
+  const out = { ...base, ...f };
+  if (f.lumens == null) {
+    out.lumens = base.lumens;
+    if (f.offset) out.y = DEFAULT_POSITION.y + f.offset * 1000;
+  }
+  delete out.lux;
+  delete out.offset;
+  return out;
+}
+
+/**
+ * Forma emissora de uma luminária, no espaço da cena (mm). Com placa difusora, quem emite é a placa:
+ * maior, Lambertiana, mais baixa e com 70% do fluxo.
+ */
+export function resolveLuminaire(f, camera = { x: 0, y: 0, z: 1300 }) {
   const m = FIXTURE_MODELS[f.model] || FIXTURE_MODELS.panel;
-  const diff = m.alwaysDiffuse || f.diffuser;
-  return { ...(diff ? m.diffused : m.bare), diffused: diff, lux: f.lux * (diff && !m.alwaysDiffuse ? DIFFUSER_TRANSMISSION : 1) };
+  const attached = m.fixedToCamera;
+  const x = attached ? camera.x : f.x, y = attached ? camera.y : f.y;
+  const rot = ((f.rot || 0) * Math.PI) / 180;
+  if (m.shape === 'dome') {
+    return { shape: 'dome', x, y, z: f.z ?? 60, R: f.radius ?? m.size[0] / 2, hole: m.size[1], lumens: f.lumens, m: 1, rot: 0 };
+  }
+  const z = attached ? camera.z - 20 : f.z;
+  if (f.diffuser && !m.alwaysDiffuse && !attached) {
+    const [w, d] = m.size;
+    return {
+      shape: 'rect', x, y, z: z - DIFFUSER_DROP, rot,
+      w: Math.max(300, w + 2 * DIFFUSER_MARGIN), d: Math.max(300, d + 2 * DIFFUSER_MARGIN),
+      lumens: f.lumens * DIFFUSER_TRANSMISSION, m: 1, diffused: true,
+    };
+  }
+  if (m.shape === 'ring') return { shape: 'ring', x, y, z, rot, rOut: m.size[0] / 2, rIn: m.size[1] / 2, lumens: f.lumens, m: m.m };
+  if (m.shape === 'sphere') return { shape: 'sphere', x, y, z, rot, r: m.size[0] / 2, lumens: f.lumens, m: m.m };
+  return { shape: 'rect', x, y, z, rot, w: m.size[0], d: m.size[1], lumens: f.lumens, m: m.m };
+}
+
+/**
+ * Onde o reflexo do centro da luminária cai num plano horizontal na altura z, visto pela câmera:
+ * o ponto do plano em que o raio câmera → plano → luminária obedece à lei da reflexão.
+ * null se a luminária não está acima do plano.
+ */
+export function glarePoint(lum, camera, z) {
+  const hc = camera.z - z, hf = lum.z - z;
+  if (hc <= 0 || hf <= 0) return null;
+  const t = hc / (hc + hf);
+  return { x: camera.x + (lum.x - camera.x) * t, y: camera.y + (lum.y - camera.y) * t };
 }
 
 /** Luz do dia na bancada (teto com difusor e janelas) numa hora. */
@@ -99,31 +165,34 @@ export function daylightAt(hour, skylightLux = 220, windowLux = 120) {
   };
 }
 
-const AMBIENT_LOOK = { specular: 0.18, hot: [0.45, 0.45], center: [0.62, 0.42], falloff: 0, gradient: 0, strobe: false };
-
-/** Fontes ativas, cada uma com intensidade, cor, forma (queda, reflexo) e flicker. */
-export function lightSources(light) {
+/**
+ * Fontes ativas. Galpão: iluminância uniforme (as janelas clareiam um lado). Bancada: luminária com
+ * forma e posição; `lux` é a iluminância calculada no ponto de referência (centro do alvo).
+ * ctx: { camera: {x, y, z}, ref: {x, y, z} } — câmera (ring light e domo acompanham) e alvo.
+ */
+export function lightSources(light, ctx = {}) {
   const L = normalizeLight(light);
+  const camera = ctx.camera || { x: 0, y: 0, z: 1300 };
+  const ref = ctx.ref || { x: 0, y: 0, z: 0 };
   const out = [];
   const keep = 1 - Math.min(0.95, Math.max(0, L.cover || 0));
   const a = L.ambient;
   if (a.on) {
     const d = daylightAt(a.hour, a.skylight, a.windows);
-    out.push({ id: 'lamps', group: 'ambient', label: 'Lâmpadas do galpão', lux: a.lamps * keep, kelvin: a.lampKelvin, flicker: a.lampFlicker, ...AMBIENT_LOOK });
-    if (d.sky > 0.5) out.push({ id: 'sky', group: 'ambient', label: 'Teto (luz do dia)', lux: d.sky * keep, kelvin: d.skyK, flicker: 0, ...AMBIENT_LOOK });
+    const amb = { group: 'ambient', gradient: 0, strobe: false };
+    out.push({ ...amb, id: 'lamps', label: 'Lâmpadas do galpão', lux: a.lamps * keep, kelvin: a.lampKelvin, flicker: a.lampFlicker });
+    if (d.sky > 0.5) out.push({ ...amb, id: 'sky', label: 'Teto (luz do dia)', lux: d.sky * keep, kelvin: d.skyK, flicker: 0 });
     // janelas clareiam um lado da bancada
-    if (d.win > 0.5) out.push({ id: 'win', group: 'ambient', label: 'Janelas', lux: d.win * keep, kelvin: d.winK, flicker: 0, ...AMBIENT_LOOK, gradient: 0.6 });
+    if (d.win > 0.5) out.push({ ...amb, id: 'win', label: 'Janelas', lux: d.win * keep, kelvin: d.winK, flicker: 0, gradient: 0.6 });
   }
   for (const f of L.fixtures) {
     if (!f.on) continue;
-    const look = fixtureLook(f);
+    const lum = resolveLuminaire(f, camera);
+    const ems = emitters(lum);
     out.push({
       id: f.id, group: 'bench', label: FIXTURE_MODELS[f.model]?.label || 'Luz',
-      lux: look.lux, kelvin: f.kelvin, flicker: f.strobe ? 0 : f.flicker,
-      specular: look.specular, hot: look.hot || null, ring: look.ring || null,
-      // deslocamento para frente/trás da emenda (a fita corre no sentido do comprimento da caixa)
-      center: [0.5, 0.5 + (FIXTURE_MODELS[f.model]?.fixedToCamera ? 0 : f.offset || 0)], falloff: look.falloff, gradient: 0,
-      strobe: !!f.strobe, pulse: f.pulse, overdrive: f.overdrive,
+      lux: illuminance(ems, ref.x, ref.y, ref.z), kelvin: f.kelvin, flicker: f.strobe ? 0 : f.flicker,
+      lum, ems, strobe: !!f.strobe, pulse: f.pulse, overdrive: f.overdrive,
     });
   }
   return out;
@@ -145,8 +214,8 @@ export function sourceSignal(src, shutterS, gainDb = 0) {
 }
 
 /** Participação de cada grupo de fonte (ambient = galpão, bench = luzes da bancada) no sinal da imagem. */
-export function lightMix(light, shutterS) {
-  const src = lightSources(light);
+export function lightMix(light, shutterS, ctx) {
+  const src = lightSources(light, ctx);
   const by = {};
   let total = 0;
   for (const s of src) {
@@ -159,12 +228,12 @@ export function lightMix(light, shutterS) {
 }
 
 /** Quanto o brilho total da imagem muda ao longo do dia (7h a 18h), com o obturador dado. */
-export function dayVariation(light, shutterS) {
+export function dayVariation(light, shutterS, ctx) {
   const L = normalizeLight(light);
   if (!L.ambient.on) return { min: 1, max: 1, spread: 0 };
   let min = Infinity, max = -Infinity;
   for (let h = 7; h <= 18; h += 0.5) {
-    const t = lightSources({ ...L, ambient: { ...L.ambient, hour: h } }).reduce((acc, s) => acc + sourceSignal(s, shutterS), 0);
+    const t = lightSources({ ...L, ambient: { ...L.ambient, hour: h } }, ctx).reduce((acc, s) => acc + sourceSignal(s, shutterS), 0);
     min = Math.min(min, t);
     max = Math.max(max, t);
   }
@@ -172,8 +241,8 @@ export function dayVariation(light, shutterS) {
 }
 
 /** Variação entre fotos por flicker, ponderada pela participação de cada fonte. */
-export function combinedFlicker(light, shutterS) {
-  const src = lightSources(light);
+export function combinedFlicker(light, shutterS, ctx) {
+  const src = lightSources(light, ctx);
   let total = 0, acc = 0;
   for (const s of src) {
     const v = sourceSignal(s, shutterS);

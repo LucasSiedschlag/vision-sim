@@ -66,9 +66,22 @@ export function targetPlane(resolved) {
   return { z: top.z1, target: targets.length ? top : null };
 }
 
-/** Luz total na bancada (lux) e temperatura de cor média (mistura em mired). */
-export function effectiveLight(light) {
-  const src = lightSources(light);
+/**
+ * Contexto da luz: câmera (ring light e domo acompanham) e ponto de referência, o centro do topo do
+ * alvo (ou do objeto mais alto). É onde se mede a iluminância de cada luminária.
+ */
+export function lightContext(scene) {
+  const resolved = resolveHeights(scene.objects);
+  const plane = targetPlane(resolved);
+  const vis = resolved.filter((o) => o.visible);
+  const at = plane.target || vis.find((o) => o.z1 === plane.z) || null;
+  const c = scene.camera;
+  return { camera: { x: c.x, y: c.y, z: c.z }, ref: { x: at ? at.x : c.x, y: at ? at.y : c.y, z: plane.z } };
+}
+
+/** Luz total no alvo (lux) e temperatura de cor média (mistura em mired). */
+export function effectiveLight(scene) {
+  const src = lightSources(scene.light, lightContext(scene));
   const lux = src.reduce((a, s) => a + s.lux, 0);
   const mired = src.reduce((a, s) => a + s.lux * (1e6 / s.kelvin), 0) / Math.max(lux, 1);
   return { lux, kelvin: lux ? 1e6 / mired : 5000 };
@@ -110,11 +123,12 @@ export function opticsMetrics(scene) {
 }
 
 export function lightingMetrics(scene, shutterUsed) {
-  const eff = effectiveLight(scene.light);
-  const flicker = combinedFlicker(scene.light, shutterUsed);
-  const mix = lightMix(scene.light, shutterUsed);
-  const day = dayVariation(scene.light, shutterUsed);
-  const src = lightSources(scene.light);
+  const ctx = lightContext(scene);
+  const eff = effectiveLight(scene);
+  const flicker = combinedFlicker(scene.light, shutterUsed, ctx);
+  const mix = lightMix(scene.light, shutterUsed, ctx);
+  const day = dayVariation(scene.light, shutterUsed, ctx);
+  const src = lightSources(scene.light, ctx);
   return {
     lux: eff.lux,
     kelvin: eff.kelvin,

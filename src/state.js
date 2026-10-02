@@ -39,7 +39,7 @@ export function normalizeScene(raw) {
     detection: { ...base.detection, ...(raw.detection || {}) },
     boxes: raw.boxes ? { ...base.boxes, ...raw.boxes } : base.boxes,
     objects: raw.objects.map((o) => ({
-      x: 0, y: 0, w: 100, d: 100, h: 10, kind: 'box', rot: 0, sitOn: null, baseZ: 0, tint: [1, 1, 1], opacity: 1, gloss: 0,
+      x: 0, y: 0, w: 100, d: 100, h: 10, kind: 'box', rot: 0, sitOn: null, baseZ: 0, tint: [1, 1, 1], opacity: 1,
       isTarget: false, visible: true, keepAspect: true, color: '#888888', ...o,
     })),
   };

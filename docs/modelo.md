@@ -36,16 +36,58 @@ calcula e onde ela simplifica a realidade.
 - Câmeras sem sensor identificado: tamanho do pixel pelo formato óptico do datasheet (diagonal ≈ 18 mm / x
   para "1/x"") ou, sem formato, pela lente (focal e FOV). Supõe-se pixel da mesma geração do IMX327:
   mesmo `Hsat` (mesmo brilho) e capacidade proporcional à área (pixel menor = menos elétrons = mais ruído).
-- Exposição automática: menor ganho possível; procura o obturador que deixa a média da imagem em 18%.
+- Exposição automática: menor ganho possível; procura o obturador que deixa a média da imagem em 18%,
+  com medição central ponderada (gaussiana de 35% da meia largura), o padrão comum em câmeras IP.
+- Flicker das luminárias: os fabricantes baratos não informam; valores estimados (o DOE/CALiPER mediu
+  de 0 a 100% em LEDs comerciais a 120 Hz). Ring light USB: corrente contínua, sem flicker.
 - Ruído do sensor, por pixel e por canal, antes do balanço de branco: ruído de disparo (√elétrons) mais
   ruído de leitura. Capacidade de 14 500 e⁻ e leitura de 3 e⁻ (ZWO ASI290MC, mesmo pixel STARVIS de
   2,9 µm), escalados pela área do pixel nos outros sensores. O ganho multiplica sinal e ruído juntos:
   clarear com ganho não melhora a relação sinal/ruído (SNR, no painel de indicadores).
-- Várias fontes ao mesmo tempo: cada uma soma seu sinal (com sua cor, queda de luz, reflexo e flicker).
-- Reflexo: mancha multiplicada pelo "brilho" do material. Lâmpada nua = ponto forte; light bar = faixa
-  alongada no sentido da fita; ring light = anel; painel = mancha larga; domo = quase nada. O difusor
-  deixa o reflexo mais fraco e espalhado e deixa passar 70% da luz. Afastar a luminária da emenda move
-  a mancha para fora da fita.
+- Várias fontes ao mesmo tempo: cada uma soma seu sinal (com sua cor, iluminância, reflexo e flicker).
+
+## Luminárias (`src/core/photometry.js`, `src/core/illumination.js`)
+
+- Cada luminária é um produto real de baixo custo com os dados do fabricante (fluxo em lm, ângulo,
+  tamanho; preço e loja consultados em 02/10/2026). Os campos que não vieram do datasheet são marcados
+  como estimados na interface:
+
+  | Tipo | Produto | Fluxo | Forma | Distribuição |
+  |---|---|---|---|---|
+  | Lâmpada bulbo | Philips LEDbulb A60 9 W 6500 K | 806 lm | esfera Ø 60 mm | 180° (m = 0) |
+  | Barra linear | Avant Hummer 60 cm 16 W | 1460 lm | 600 × 30 mm (largura estimada) | 120° (m = 1) |
+  | Painel | Taschibra sobrepor 24 W | 1680 lm | 280 × 280 mm | 120° (m = 1) |
+  | Ring light | Streamplify Light 10 (USB) | 1000 lm | anel Ø 220–260 mm | m = 2,13 (480 lux a 1 m) |
+  | Domo | montagem própria Ø 90 cm | 1500 lm (estimado) | meia esfera | Lambertiana |
+
+- Intensidade `I(θ) = I0 · cosᵐ θ`, com `Φ = 2π · I0 / (m + 1)`. A forma é dividida em pontos emissores
+  (até 12 × 12 no painel, 24 no anel, ~150 no domo) e a iluminância numa superfície horizontal é
+  `E = Σ I0 · cosᵐ θe · cos θr / d²`. Testado contra a fórmula fechada da fonte retangular Lambertiana
+  (erro < 1%) e contra os 480 lux a 1 m do ring light.
+- A iluminância é calculada a cada 16 px da imagem, na altura de cada superfície (bancada, prato, topo
+  da caixa, fita), e interpolada. Subir a luminária escurece; a luz cai para as bordas sozinha.
+- Placa difusora leitosa: quem emite passa a ser a placa (luminária + 100 mm de cada lado, 50 mm abaixo),
+  Lambertiana, com 70% do fluxo (transmissão estimada).
+- Domo: superfície interna de luminância uniforme `L = Φ / (π · área)`.
+
+## Reflexo especular
+
+- Superfícies têm refletância especular na incidência normal `F0` (Fresnel) e aspereza (desvio do
+  lóbulo de reflexo, em radianos). O reflexo cresce em ângulo rasante (aproximação de Schlick).
+- Fita (filme BOPP): índice de refração ≈ 1,50 (1,495–1,528 conforme a direção de estiramento, dados de
+  patentes de filme BOPP) → `F0 = ((n − 1)/(n + 1))² ≈ 4%`. Brilho a 45° de 83–93 GU (ASTM D2457): o
+  filme é quase um espelho. Na caixa ele segue as ondas do papelão: aspereza estimada em ~2° (0,04 rad).
+- Papelão: celulose (n ≈ 1,5), mas fosco (kraftliner revestido mede 42–45 GU a 75°, TAPPI T480; o pardo
+  comum é mais fosco). Aspereza 0,45 rad: o reflexo se espalha tanto que quase some. Aço inox escovado
+  do prato: `F0 ≈ 0,55`, aspereza 0,2 (estimados).
+- Para cada pixel: o raio da câmera até a superfície é espelhado na normal (para cima) e segue até a
+  luminária. Se acerta, o pixel recebe `F · L` da luminária (L = luminância da parte que brilha, cd/m²).
+  A aspereza vira um lóbulo gaussiano: a forma da luminária é suavizada pela largura do lóbulo naquela
+  distância (convolução exata de retângulo com gaussiana, via função erro).
+- Ordem de grandeza: painel de 24 W tem ~6800 cd/m²; refletido na fita, ~270 cd/m², cerca de 4× o
+  papelão em volta sob 700 lux. A lâmpada bulbo (~45 000 cd/m²) estoura. Por isso tirar a luminária da
+  linha entre a câmera e a fita resolve: a vista de cima marca onde cai o reflexo de cada luminária.
+- Galpão: tratado como céu uniforme, reflete `F × E` (um véu fraco, ~4% na fita).
 - Luz contínua: o sinal de todas as fontes é proporcional ao obturador, então a proporção bancada/galpão
   não muda com o obturador. LED pulsado: a contribuição é intensidade × sobrecorrente × min(pulso,
   obturador); encurtar o obturador até o pulso corta o galpão sem perder o LED.
@@ -78,7 +120,9 @@ calcula e onde ela simplifica a realidade.
 
 ## O que não está modelado
 
-Sombras projetadas, câmera inclinada, desfoque, aberração cromática, vinheta da lente (lentes grande
+Sombras projetadas (inclusive a da própria câmera e da caixa), luminárias aparecendo na imagem ou
+tapando a vista, luz refletida entre superfícies (só o domo assume interior uniforme), paredes das
+caixas iluminadas de lado (usam a luz do topo), reflexo nas paredes, câmera inclinada, desfoque, aberração cromática, vinheta da lente (lentes grande
 angular com distorção em barril não seguem cos⁴ e os datasheets não trazem a iluminação relativa), sensor
 com resposta espectral real (a resposta por lux é a da referência de 3200 K para todas as luzes), mosaico
 Bayer e redução de ruído da câmera (o ruído mostrado é o do sensor, antes do filtro de ruído que câmeras

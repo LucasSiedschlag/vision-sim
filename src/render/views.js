@@ -1,6 +1,7 @@
 // Vista de cima (planta) e vista de frente (elevação), em escala real.
 
 import { resolveHeights, drawOrder, resolveCamera, targetPlane, opticsMetrics } from '../core/scene.js';
+import { normalizeLight, resolveLuminaire, glarePoint, FIXTURE_MODELS } from '../core/lighting.js';
 import { rectCorners, footprint, DEG } from '../core/optics.js';
 import { topTexture, sideColor } from './textures.js';
 
@@ -73,6 +74,11 @@ function sceneBounds(scene, resolved, cam) {
     minY = Math.min(minY, y); maxY = Math.max(maxY, y);
   };
   for (const o of resolved) if (o.visible) rectCorners(o, 0).forEach((p) => add(p.x, p.y));
+  for (const { lum } of sceneFixtures(scene)) {
+    const r = lum.shape === 'rect' ? Math.hypot(lum.w, lum.d) / 2 : lum.shape === 'ring' ? lum.rOut : lum.shape === 'dome' ? lum.R : lum.r;
+    add(lum.x - r, lum.y - r);
+    add(lum.x + r, lum.y + r);
+  }
   const plane = targetPlane(resolved);
   const fp = footprint(cam.z - plane.z, cam.lens.hfov, cam.w, cam.h);
   add(cam.x - fp.width / 2, cam.y - fp.height / 2);
@@ -122,8 +128,10 @@ export function drawTopView(canvas, scene, ui) {
   }
   ctx.setTransform(1, 0, 0, 1, 0, 0);
 
-  // Campo de visão
   const plane = targetPlane(resolved);
+  drawFixturesTop(ctx, scene, plane, { X, Y, scale, dpr }, ui);
+
+  // Campo de visão
   const fpT = footprint(cam.z - plane.z, cam.lens.hfov, cam.w, cam.h);
   const fpB = footprint(cam.z, cam.lens.hfov, cam.w, cam.h);
   const accent = token('--accent');
@@ -185,6 +193,10 @@ export function drawFrontView(canvas, scene, ui) {
   if (!fb) {
     let minX = cam.x - half, maxX = cam.x + half;
     for (const o of resolved) if (o.visible) rectCorners(o, 0).forEach((p) => { minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x); });
+    for (const { lum } of sceneFixtures(scene)) {
+      const r = lum.shape === 'rect' ? Math.max(lum.w, lum.d) / 2 : lum.shape === 'ring' ? lum.rOut : lum.shape === 'dome' ? lum.R : lum.r;
+      minX = Math.min(minX, lum.x - r); maxX = Math.max(maxX, lum.x + r);
+    }
     const maxTop = Math.max(cam.z, ...resolved.filter((o) => o.visible).map((o) => o.z1));
     const padX = (maxX - minX) * 0.08 + 60;
     fb = { minX: minX - padX, maxX: maxX + padX, minZ: -Math.max(80, maxTop * 0.1), maxZ: maxTop * 1.12 + 60 };
@@ -270,6 +282,8 @@ export function drawFrontView(canvas, scene, ui) {
   ctx.stroke();
   label(ctx, `${Math.round(fpT.width)} mm`, X(cam.x + fpT.width / 2) + 6 * dpr, Z(plane.z) - 10 * dpr, { dpr, color: accent });
 
+  drawFixturesFront(ctx, scene, { X, Z, dpr });
+
   // Câmera
   const cx = X(cam.x), cz = Z(cam.z);
   ctx.fillStyle = token('--cam');
@@ -288,4 +302,85 @@ export function drawFrontView(canvas, scene, ui) {
   label(ctx, `altura ${Math.round(cam.z)} mm`, rx + 6 * dpr, cz + 10 * dpr, { dpr, color: token('--muted') });
   label(ctx, `${Math.round(m.distanceMm)} mm até o alvo`, cx + 8 * dpr, (cz + Z(plane.z)) / 2, { dpr });
   if (zNear > zFar) label(ctx, 'faixa nítida', w - 8 * dpr, Z(Math.max(zFar, 0)) - 12 * dpr, { dpr, color: token('--ok'), align: 'right' });
+}
+
+/* ---------- Luminárias nas vistas ---------- */
+
+/** Luminárias ligadas, com a forma resolvida (ring light e domo seguem a câmera). */
+export function sceneFixtures(scene) {
+  const L = normalizeLight(scene.light);
+  return L.fixtures.filter((f) => f.on).map((f) => ({ f, lum: resolveLuminaire(f, scene.camera), model: FIXTURE_MODELS[f.model] }));
+}
+
+function drawFixturesTop(ctx, scene, plane, { X, Y, scale, dpr }, ui) {
+  const warn = token('--warn');
+  for (const { f, lum, model } of sceneFixtures(scene)) {
+    ctx.save();
+    ctx.strokeStyle = warn;
+    ctx.fillStyle = token('--warn-soft');
+    ctx.lineWidth = (ui.selectedFixture === f.id ? 2.5 : 1.5) * dpr;
+    ctx.setLineDash(lum.diffused ? [4 * dpr, 3 * dpr] : []);
+    ctx.beginPath();
+    if (lum.shape === 'rect') {
+      ctx.translate(X(lum.x), Y(lum.y));
+      ctx.rotate(lum.rot);
+      ctx.rect((-lum.w / 2) * scale, (-lum.d / 2) * scale, lum.w * scale, lum.d * scale);
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+    } else if (lum.shape === 'sphere') {
+      ctx.arc(X(lum.x), Y(lum.y), Math.max(4 * dpr, lum.r * scale), 0, Math.PI * 2);
+    } else if (lum.shape === 'ring') {
+      ctx.arc(X(lum.x), Y(lum.y), lum.rOut * scale, 0, Math.PI * 2);
+      ctx.moveTo(X(lum.x) + lum.rIn * scale, Y(lum.y));
+      ctx.arc(X(lum.x), Y(lum.y), lum.rIn * scale, 0, Math.PI * 2, true);
+    } else if (lum.shape === 'dome') {
+      ctx.arc(X(lum.x), Y(lum.y), lum.R * scale, 0, Math.PI * 2);
+    }
+    ctx.fill('evenodd');
+    ctx.stroke();
+    ctx.restore();
+    if (!model.fixedToCamera) {
+      label(ctx, `${model.label.split(' ')[0]} ${Math.round(f.z)} mm`, X(lum.x), Y(lum.y) - 14 * dpr, { dpr, color: warn, align: 'center', size: 10 });
+    }
+    // onde o reflexo do centro da luminária aparece no plano do alvo
+    const g = lum.shape === 'dome' ? null : glarePoint(lum, scene.camera, plane.z);
+    if (g) {
+      const gx = X(g.x), gy = Y(g.y), r = 5 * dpr;
+      ctx.strokeStyle = warn;
+      ctx.lineWidth = 1.5 * dpr;
+      ctx.beginPath();
+      ctx.moveTo(gx - r, gy); ctx.lineTo(gx + r, gy);
+      ctx.moveTo(gx, gy - r); ctx.lineTo(gx, gy + r);
+      ctx.moveTo(gx - r * 0.7, gy - r * 0.7); ctx.lineTo(gx + r * 0.7, gy + r * 0.7);
+      ctx.moveTo(gx - r * 0.7, gy + r * 0.7); ctx.lineTo(gx + r * 0.7, gy - r * 0.7);
+      ctx.stroke();
+      label(ctx, 'reflexo', gx + 8 * dpr, gy, { dpr, color: warn, size: 10 });
+    }
+  }
+}
+
+function drawFixturesFront(ctx, scene, { X, Z, dpr }) {
+  const warn = token('--warn');
+  for (const { lum } of sceneFixtures(scene)) {
+    ctx.fillStyle = warn;
+    ctx.strokeStyle = warn;
+    ctx.lineWidth = 1.5 * dpr;
+    if (lum.shape === 'dome') {
+      const r = lum.R;
+      ctx.beginPath();
+      ctx.moveTo(X(lum.x - r), Z(lum.z));
+      ctx.lineTo(X(lum.x + r), Z(lum.z));
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(X(lum.x), Z(lum.z), Math.abs(X(lum.x + r) - X(lum.x)), Math.PI, 2 * Math.PI);
+      ctx.stroke();
+      continue;
+    }
+    // extensão em X da forma emissora
+    let half;
+    if (lum.shape === 'rect') half = (Math.abs(Math.cos(lum.rot)) * lum.w + Math.abs(Math.sin(lum.rot)) * lum.d) / 2;
+    else if (lum.shape === 'ring') half = lum.rOut;
+    else half = lum.r;
+    const x0 = X(lum.x - half), x1 = X(lum.x + half);
+    ctx.fillRect(x0, Z(lum.z) - 3 * dpr, Math.max(4 * dpr, x1 - x0), 5 * dpr);
+  }
 }
