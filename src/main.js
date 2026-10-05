@@ -297,9 +297,11 @@ function start(saved) {
     const lm = lightingMetrics(sc, last.exposure.shutter);
     const ex = last.exposure;
     const clip = ex.clippedRatio;
-    metric('exposure', 'Exposição', `${shutterLabel(ex.shutter)} · ${ex.gainDb.toFixed(0)} dB`,
+    metric('exposure', 'Exposição', `${shutterLabel(ex.shutter)} · ${ex.gainDb.toFixed(0)} dB${ex.antiFlicker ? ' · anti-cintilação' : ''}`,
       clip > 0.02 ? 'bad' : ex.gainDb > 18 ? 'warn' : 'ok',
-      clip > 0.002 ? `${(clip * 100).toFixed(1)}% da imagem estourada` : ex.gainDb > 18 ? 'ganho alto, mais ruído' : 'sem áreas estouradas');
+      clip > 0.002
+        ? `${(clip * 100).toFixed(1)}% da imagem estourada${ex.antiFlicker && ex.shutter >= 1 / 121 && ex.gainDb < 0.5 ? ': mesmo em 1/120 s entra luz demais (diminua a luz da bancada)' : ''}`
+        : ex.gainDb > 18 ? 'ganho alto, mais ruído' : 'sem áreas estouradas');
     if (ex.meanE < 1 || !Number.isFinite(ex.snrDb)) {
       metric('noise', 'Ruído no cinza médio', 'sem luz', 'bad', 'nenhuma luz chega ao sensor');
     } else {
@@ -309,7 +311,9 @@ function start(saved) {
     }
     metric('flicker', 'Variação entre fotos', `±${(lm.flickerSpread * 50).toFixed(0)}%`,
       lm.flickerSpread > 0.1 ? 'bad' : lm.flickerSpread > 0.03 ? 'warn' : 'ok',
-      lm.flickerSafe ? 'obturador em sincronia com a rede' : 'obturador fora de sincronia com 60 Hz');
+      lm.flickerSafe ? 'obturador em sincronia com a rede'
+        : lm.flickerSpread > 0.03 ? 'faixas horizontais na imagem: obturador mais curto que o piscar das lâmpadas (1/120 s); ligue a anti-cintilação'
+          : 'obturador fora de sincronia com 60 Hz');
     metric('light', 'Luz na cena', `${Math.round(lm.lux)} lux · ${Math.round(lm.kelvin)} K`, '',
       lm.ambientOn ? `bancada ${Math.round(lm.benchShare * 100)}% · galpão ${Math.round(lm.ambientShare * 100)}% da imagem` : 'só luzes da bancada');
     if (lm.ambientOn) {

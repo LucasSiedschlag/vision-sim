@@ -301,6 +301,8 @@ function cameraPanel({ store, add, notify }) {
     section('Exposição', 'Tempo de obturador múltiplo de 1/120 s evita o "piscar" das lâmpadas na rede de 60 Hz.',
       add(segmented({ label: 'Modo', options: [{ value: 'auto', label: 'Automática' }, { value: 'manual', label: 'Manual' }],
         get: () => C().exposureMode, set: (v) => up((c) => { c.exposureMode = v; }, true) })),
+      C().exposureMode === 'auto' ? add(check({ id: 'cam-antiflicker', label: 'Anti-cintilação (rede de 60 Hz)', get: () => C().antiFlicker, set: (v) => up((c) => { c.antiFlicker = v; }),
+        hint: 'Como nas câmeras IP: o automático só usa obturador múltiplo de 1/120 s. Some com as faixas das lâmpadas, mas com luz forte e lente clara a imagem estoura.' })) : null,
       C().exposureMode === 'manual' ? add(select({ id: 'cam-shutter', label: 'Obturador', options: shutterOpts, get: nearestShutter, set: (v) => up((c) => { c.shutter = Number(v); }) })) : null,
       C().exposureMode === 'manual' ? add(range({ id: 'cam-gain', label: 'Ganho', min: 0, max: 36, step: 1, get: () => C().gainDb, set: (v) => up((c) => { c.gainDb = v; }), format: (v) => `${v} dB`,
         hint: 'Mais ganho clareia sem juntar mais luz: o ruído cresce junto.' })) : null),

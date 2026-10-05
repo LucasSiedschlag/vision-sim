@@ -105,6 +105,7 @@ export function exampleScene() {
       x: 0, y: 0, z: 1300,
       // F1.0 sob ~600 lux satura em 1/120 s (sensor real): a exposição automática encurta o obturador
       exposureMode: 'auto',
+      antiFlicker: false, // como nas câmeras IP: obturador preso a múltiplos de 1/120 s (rede de 60 Hz)
       shutter: 1 / 120,
       gainDb: 0,
       wbMode: 'manual-k',

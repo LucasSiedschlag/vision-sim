@@ -252,7 +252,12 @@ export async function renderCamera(scene, captureSeed = 1) {
   // Exposição
   const c = scene.camera;
   let shutter = c.shutter, gainDb = c.gainDb;
-  if (c.exposureMode === 'auto' && sources.length) {
+  if (c.exposureMode === 'auto' && sources.length && c.antiFlicker) {
+    // anti-cintilação (rede de 60 Hz): o obturador só pode ser múltiplo do período de 1/120 s, para cada
+    // linha integrar ciclos inteiros das lâmpadas. Se 1/120 s ainda é luz demais, a imagem estoura.
+    shutter = [4, 3, 2, 1].map((k) => k / 120).find((t) => lumaAt(t) <= 0.18) ?? 1 / 120;
+    gainDb = Math.min(36, Math.max(0, 20 * Math.log10(0.18 / Math.max(lumaAt(shutter), 1e-6))));
+  } else if (c.exposureMode === 'auto' && sources.length) {
     // menor ganho possível: procura o obturador que deixa a média em 18%, depois completa com ganho
     gainDb = 0;
     if (lumaAt(1 / 30) < 0.18) {
@@ -437,7 +442,7 @@ export async function renderCamera(scene, captureSeed = 1) {
     profile,
     what,
     exposure: {
-      shutter, gainDb, clippedRatio: clipped / N,
+      shutter, gainDb, clippedRatio: clipped / N, antiFlicker: c.exposureMode === 'auto' && !!c.antiFlicker,
       // cinza médio da imagem: elétrons por pixel e relação sinal/ruído
       meanE: Math.min(1, lumaAt(shutter)) * cam.sensor.fullWellE,
       snrDb: snrDb(cam.sensor, Math.min(1, lumaAt(shutter)) * gainLin, gainLin),

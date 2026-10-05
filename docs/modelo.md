@@ -113,8 +113,13 @@ calcula e onde ela simplifica a realidade.
   laterais (3200 K no começo/fim do dia, ~6000 K ao meio-dia), misturadas em mired. As janelas deixam
   um lado da imagem mais claro, na proporção da luz que vem delas.
 - Flicker: lâmpada oscila a 120 Hz; cada linha da imagem integra a luz num intervalo diferente
-  (obturador rolling, 1/30 s para ler o quadro). Por isso aparecem faixas e variação entre fotos quando
-  o obturador não é múltiplo de 1/120 s.
+  (obturador rolling, 1/30 s para ler o quadro). Por isso aparecem faixas horizontais e variação entre
+  fotos quando o obturador não é múltiplo de 1/120 s: uma faixa clara e uma escura a cada 270 linhas
+  (1080 linhas lidas em 1/30 s, 4 ciclos de 1/120 s). Conferido na imagem renderizada: período de 270
+  linhas e ±5,7% com o galpão (15% de flicker) e o painel, sumindo em 1/120 s e 1/60 s.
+- Anti-cintilação (aba Câmera, exposição automática): como nas câmeras IP, o automático só usa
+  1/120, 1/60, 1/40 ou 1/30 s e completa com ganho. Some com as faixas, mas não deixa encurtar o
+  obturador: com lente clara e luz forte a imagem estoura (ColorVu F1.0 com ~1300 lux: 99,9% estourada).
 - Saturação conta pixels com algum canal ≥ 1.
 - Balanço automático por "zona cinza", como nas câmeras: só entram pixels cuja cor poderia ser uma
   superfície cinza sob alguma luz real (a até 0,15 em log r/g, b/g da curva do corpo negro), sem escuros
