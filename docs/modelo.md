@@ -109,8 +109,25 @@ calcula e onde ela simplifica a realidade.
   (obturador rolling, 1/30 s para ler o quadro). Por isso aparecem faixas e variação entre fotos quando
   o obturador não é múltiplo de 1/120 s.
 - Saturação conta pixels com algum canal ≥ 1.
-- Balanço automático: "mundo cinza" (a média da imagem vira neutra). É o motivo de uma fita vermelha
-  grande puxar a cor do resto.
+- Balanço automático por "zona cinza", como nas câmeras: só entram pixels cuja cor poderia ser uma
+  superfície cinza sob alguma luz real (a até 0,15 em log r/g, b/g da curva do corpo negro), sem escuros
+  nem estourados, pesados pela medição central. Cores fortes, como a fita vermelha, ficam de fora
+  sozinhas. O resultado é a temperatura da curva (2500–10 000 K) mais próxima da média desses pixels, e
+  os ganhos são os dessa luz. Limitação real que o simulador reproduz: papelão pardo sob luz fria tem a
+  mesma cor de um cinza sob luz quente (~3300 K), então uma caixa ocupando a imagem engana o automático
+  para ~3700–4000 K: a imagem esfria e a fita puxa ~7–10° para o magenta. O indicador avisa quando o
+  automático se afasta mais de 30 mired da luz real. Antes era "mundo cinza" sem limite, que chegava a
+  ganhos impossíveis (vermelho ×0,25) e jogava a fita para perto do limite da tolerância de cor.
+
+## Objetos translúcidos
+
+- Abaixo de 100% de opacidade, o objeto é um filme colorido: a parte opaca (α) devolve a própria cor C e o
+  resto deixa a luz atravessar o corante na ida e na volta, filtrando o que está embaixo:
+  `R = C · (α + (1 − α) · R_embaixo)`. Escurece e mantém o tom do filme (fita vermelha translúcida sobre
+  papelão continua vermelha), em vez de misturar as cores como tinta, que puxava o vermelho para o laranja.
+  A conta é feita em sRGB, que se aproxima de uma potência, onde multiplicar equivale a multiplicar em
+  linear.
+- O alvo conta como alvo com qualquer opacidade; outros objetos só tapam o alvo acima de 50%.
 
 ## Entrega e detecção
 

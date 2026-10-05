@@ -346,3 +346,37 @@ test('luminária antiga (lux + offset) vira produto com fluxo e posição', () =
   assert.equal(f.lux, undefined);
   near(f.y, 500, 1e-9);
 });
+
+import { autoWhiteBalance } from '../src/core/color.js';
+
+// sinal bruto de várias superfícies (hex sRGB, quantidade, brilho) sob uma luz de K kelvin
+function rawScene(K, parts) {
+  const ill = illuminantRgb(K);
+  const out = [];
+  for (const [hex, n, E] of parts) {
+    const c = [1, 3, 5].map((i) => srgbToLinear(parseInt(hex.slice(i, i + 2), 16) / 255));
+    for (let i = 0; i < n; i++) out.push(c[0] * ill[0] * E, c[1] * ill[1] * E, c[2] * ill[2] * E);
+  }
+  return new Float32Array(out);
+}
+
+test('balanço automático: acha a luz pelo cinza e ignora a fita vermelha', () => {
+  for (const K of [3000, 4000, 6500]) {
+    const a = autoWhiteBalance(rawScene(K, [['#808080', 200, 0.8], ['#d0202a', 800, 0.9]]));
+    near(1e6 / a.kelvin, 1e6 / K, 4); // dentro de 4 mired
+    assert.ok(a.zoneUsed);
+  }
+});
+
+test('balanço automático: papelão pardo engana (parece cinza sob luz quente), mas fica numa luz real', () => {
+  const a = autoWhiteBalance(rawScene(6500, [['#b8875a', 600, 0.9], ['#62676b', 300, 0.5], ['#d0202a', 100, 0.9]]));
+  assert.ok(a.kelvin < 5000, `${a.kelvin}`); // enganado para o lado quente
+  assert.ok(a.kelvin >= 2500 && a.gains[0] > 0.4 && a.gains[2] < 2.6, JSON.stringify(a)); // ganhos de uma luz real
+  // o "mundo cinza" antigo dava vermelho ×0,25 neste tipo de cena; preso à curva, não passa de 2500 K
+});
+
+test('balanço automático: sem nenhum cinza possível, usa a média presa à curva', () => {
+  const a = autoWhiteBalance(rawScene(6500, [['#d0202a', 500, 0.9], ['#20a030', 500, 0.6]]));
+  assert.equal(a.zoneUsed, false);
+  assert.ok(a.kelvin >= 2500 && a.kelvin <= 10000);
+});

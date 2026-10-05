@@ -3,7 +3,7 @@
 
 import { resolveHeights, drawOrder, resolveCamera, effectiveLight, detectionParams, detectionMode, lightContext } from '../core/scene.js';
 import { project, planeScale, rectCorners, lensMap, DEG } from '../core/optics.js';
-import { SRGB_TO_LINEAR, LINEAR_TO_SRGB8, illuminantRgb, wbGainsForKelvin, grayWorldGains } from '../core/color.js';
+import { SRGB_TO_LINEAR, LINEAR_TO_SRGB8, illuminantRgb, wbGainsForKelvin, autoWhiteBalance } from '../core/color.js';
 import { lightSources, timeFactor, flickerAverage } from '../core/lighting.js';
 import { whiteSignalPerLuxS, snrDb } from '../core/sensor.js';
 import { computeLightFields } from '../core/illumination.js';
@@ -40,8 +40,8 @@ function canvas(name, w, h) {
 
 /**
  * Desenha a cena vista pela câmera.
- * mode 'color': cores reais. mode 'data': canal R = brilho (reflexo) do material, canal G = 255 onde está o alvo,
- * canal B = 255 onde o alvo tem tinta da cor procurada (referência ideal).
+ * mode 'color': cores reais. mode 'data': canal G = 255 onde está o alvo, canal B = 255 onde o alvo tem
+ * tinta da cor procurada (referência ideal).
  */
 function drawGeometry(ctx, objs, cam, mode, ink = null) {
   ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -53,7 +53,9 @@ function drawGeometry(ctx, objs, cam, mode, ink = null) {
 
   for (const o of objs) {
     if (o.z1 >= cam.z - 5) continue; // objeto acima da câmera
-    const alpha = mode === 'color' ? o.opacity : o.opacity > 0.5 ? 1 : 0;
+    // nos dados, o alvo conta com qualquer opacidade (um filme claro continua sendo a fita); outros objetos
+    // só tapam o alvo se forem mais opacos que transparentes
+    const alpha = mode === 'color' ? o.opacity : o.isTarget || o.opacity > 0.5 ? 1 : 0;
     if (alpha <= 0) continue;
     ctx.globalAlpha = alpha;
 
@@ -84,7 +86,22 @@ function drawGeometry(ctx, objs, cam, mode, ink = null) {
     const cos = Math.cos(o.rot * DEG) * s, sin = Math.sin(o.rot * DEG) * s;
     ctx.setTransform(cos, sin, -sin, cos, c.u, c.v);
     if (mode === 'color') {
-      ctx.drawImage(topTexture(o), -o.w / 2, -o.d / 2, o.w, o.d);
+      const tex = topTexture(o);
+      if (o.opacity < 1) {
+        // Filme colorido translúcido: a parte opaca (α) devolve a própria cor C; o resto deixa passar a luz,
+        // que atravessa o corante na ida e na volta e filtra o que está embaixo:
+        //   R = C · (α + (1 − α) · R_embaixo)
+        // Escurece e mantém o tom do filme, em vez de misturar as cores como tinta.
+        // Multiplicar em sRGB ≈ multiplicar em linear (a curva sRGB é quase uma potência).
+        ctx.globalAlpha = o.opacity;
+        ctx.drawImage(whiteSilhouette(tex), -o.w / 2, -o.d / 2, o.w, o.d);
+        ctx.globalAlpha = 1;
+        ctx.globalCompositeOperation = 'multiply';
+        ctx.drawImage(tex, -o.w / 2, -o.d / 2, o.w, o.d);
+        ctx.globalCompositeOperation = 'source-over';
+      } else {
+        ctx.drawImage(tex, -o.w / 2, -o.d / 2, o.w, o.d);
+      }
     } else {
       ctx.fillStyle = `rgb(0,${o.isTarget ? 255 : 0},0)`;
       ctx.fillRect(-o.w / 2, -o.d / 2, o.w, o.d);
@@ -100,6 +117,23 @@ function drawGeometry(ctx, objs, cam, mode, ink = null) {
 }
 
 /** Mesmo remapeamento da distorção para um mapa de luz (Float32, um valor por pixel). */
+const silhouettes = new WeakMap();
+/** A forma da textura (o alfa dela) em branco. */
+function whiteSilhouette(tex) {
+  let c = silhouettes.get(tex);
+  if (c) return c;
+  c = document.createElement('canvas');
+  c.width = tex.width;
+  c.height = tex.height;
+  const x = c.getContext('2d');
+  x.drawImage(tex, 0, 0);
+  x.globalCompositeOperation = 'source-in';
+  x.fillStyle = '#fff';
+  x.fillRect(0, 0, c.width, c.height);
+  silhouettes.set(tex, c);
+  return c;
+}
+
 function remapF32(src, map) {
   const out = new Float32Array(map.length);
   for (let i = 0; i < map.length; i++) {
@@ -235,11 +269,22 @@ export async function renderCamera(scene, captureSeed = 1) {
   }
   const gainLin = Math.pow(10, gainDb / 20);
 
-  // Balanço de branco
-  let wb;
+  // Balanço de branco. Automático: zona cinza sobre as mesmas amostras da medição (ver autoWhiteBalance).
+  let wb, awb = null;
   if (c.wbMode === 'auto') {
-    const m = meanAt(shutter);
-    wb = grayWorldGains(m[0], m[1], m[2]);
+    const smp = new Float32Array(meterW.length * 3);
+    for (const src of sources) {
+      const k = src.lux * kWhite * timeFactor(src, shutter) * gainLin;
+      const kr = k * src.ill[0], kg = k * src.ill[1], kb = k * src.ill[2];
+      for (let j = 0, q = 0; j < N; j += 17, q += 3) {
+        const i = j << 2, f = src.field ? src.field[j] : 1, sp = src.hot ? src.hot[j] : 0;
+        smp[q] += kr * (LIN[rgba[i]] * f + sp);
+        smp[q + 1] += kg * (LIN[rgba[i + 1]] * f + sp);
+        smp[q + 2] += kb * (LIN[rgba[i + 2]] * f + sp);
+      }
+    }
+    awb = autoWhiteBalance(smp, meterW);
+    wb = awb.gains;
   } else if (c.wbMode === 'manual-k') wb = wbGainsForKelvin(c.wbKelvin);
   else wb = c.wbGains.slice();
 
@@ -399,6 +444,7 @@ export async function renderCamera(scene, captureSeed = 1) {
     },
     sensor: cam.sensor,
     wb,
+    awbKelvin: awb ? awb.kelvin : null,
     light: effectiveLight(scene),
   };
 }

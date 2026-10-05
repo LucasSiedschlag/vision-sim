@@ -60,10 +60,43 @@ export function wbGainsForKelvin(kelvin) {
   return [g / r, 1, g / b];
 }
 
-/** Balanço de branco automático "mundo cinza": média da imagem vira neutra (G = 1). */
-export function grayWorldGains(meanR, meanG, meanB) {
-  const eps = 1e-6;
-  return [meanG / Math.max(meanR, eps), 1, meanG / Math.max(meanB, eps)];
+/**
+ * Balanço de branco automático por "zona cinza", como fazem as câmeras: só entram pixels cuja cor
+ * poderia ser uma superfície cinza sob alguma luz real, isto é, perto da curva do corpo negro (em log
+ * r/g, b/g). Cores fortes como a fita vermelha ficam de fora sozinhas; escuros e estourados também.
+ * O resultado é a temperatura da curva mais próxima da média desses pixels (pesada pelo brilho), dentro
+ * da faixa que a câmera acompanha. Sem pixels candidatos, usa a média geral, também presa à curva.
+ * samples: [r, g, b, …] do sinal bruto linear (fração da saturação); weights: peso de cada amostra.
+ */
+export function autoWhiteBalance(samples, weights = null, { minK = 2500, maxK = 10000, zone = 0.15 } = {}) {
+  const locus = [];
+  for (let mired = 1e6 / maxK; mired <= 1e6 / minK + 1e-9; mired += 2) {
+    const K = 1e6 / mired;
+    const [r, g, b] = illuminantRgb(K);
+    locus.push({ K, x: Math.log(r / g), y: Math.log(b / g) });
+  }
+  const nearest = (x, y) => {
+    let best = locus[0], d2 = Infinity;
+    for (const p of locus) {
+      const e = (p.x - x) ** 2 + (p.y - y) ** 2;
+      if (e < d2) { d2 = e; best = p; }
+    }
+    return { p: best, d: Math.sqrt(d2) };
+  };
+  let R = 0, G = 0, B = 0, W = 0, aR = 0, aG = 0, aB = 0, aW = 0;
+  for (let i = 0, k = 0; i < samples.length; i += 3, k++) {
+    const r = samples[i], g = samples[i + 1], b = samples[i + 2];
+    const w = weights ? weights[k] : 1;
+    aR += w * r; aG += w * g; aB += w * b; aW += w;
+    const mx = Math.max(r, g, b);
+    if (mx < 0.02 || mx > 0.95 || Math.min(r, g, b) <= 0) continue;
+    if (nearest(Math.log(r / g), Math.log(b / g)).d > zone) continue;
+    R += w * r; G += w * g; B += w * b; W += w;
+  }
+  const zoneUsed = W > 0.02 * aW;
+  const [r, g, b] = zoneUsed ? [R, G, B] : [aR, aG, aB];
+  const K = g > 0 && r > 0 && b > 0 ? nearest(Math.log(r / g), Math.log(b / g)).p.K : 6500;
+  return { kelvin: K, gains: wbGainsForKelvin(K), grayShare: aW ? W / aW : 0, zoneUsed };
 }
 
 /** RGB 0..255 → HSV (h em graus 0..360, s e v em 0..1). */

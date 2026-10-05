@@ -167,7 +167,7 @@ function scenePanel({ store, add, notify }) {
       get: () => sel()?.tint[i] ?? 1, set: (v) => mut((t) => { t.tint = t.tint.slice(); t.tint[i] = v; }) }))))
     : add(rgbColor({ label: o.texture === 'tape-clear-logo' ? 'Cor do logo' : 'Cor', get: () => sel()?.color ?? '#888888', set: (v) => mut((t) => { t.color = v; }), hexToRgb, rgbToHex })),
   add(range({ id: 'obj-op', label: 'Opacidade', min: 0.1, max: 1, step: 0.05, format: fmtPct, get: get('opacity'), set: (v) => mut((t) => { t.opacity = v; }),
-    hint: 'Abaixo de 100% simula fita transparente.' })),
+    hint: 'Abaixo de 100%: filme colorido translúcido. Filtra o que está embaixo (escurece e mantém o tom), como uma fita colorida transparente.' })),
   add(select({ id: 'obj-surface', label: 'Superfície (reflexo)', options: Object.entries(SURFACES).map(([k, m]) => ({ value: k, label: m.label })),
     get: () => surfaceOf(sel() || {}).key,
     set: (v) => mut((t) => { t.surface = v; t.roughness = SURFACES[v].roughness; }, true) })),
@@ -308,7 +308,7 @@ function cameraPanel({ store, add }) {
       C().wbMode === 'manual-rgb' ? h('div', { class: 'rgb-grid' }, ['R', 'G', 'B'].map((n, i) => add(range({
         label: `Ganho ${n}`, min: 0.3, max: 3, step: 0.01, format: (v) => `${v.toFixed(2)}×`,
         get: () => C().wbGains[i], set: (v) => up((c) => { c.wbGains = c.wbGains.slice(); c.wbGains[i] = v; }) })))) : null,
-      C().wbMode === 'auto' ? h('p', { class: 'note', text: 'No automático a câmera muda o balanço conforme o que aparece na imagem. Uma fita grande e vermelha pode puxar a cor do resto.' }) : null),
+      C().wbMode === 'auto' ? h('p', { class: 'note', text: 'No automático a câmera procura na imagem o que parece cinza. O papelão pardo parece cinza sob luz quente: com a caixa ocupando a imagem, o automático esfria tudo e a fita puxa para o magenta. Para inspeção, fixe o balanço na temperatura da luz.' }) : null),
     section('Imagem entregue', null,
       add(segmented({ label: 'Cor', options: [{ value: 'color', label: 'Colorido' }, { value: 'bw', label: 'Preto e branco (modo noite)' }],
         get: () => C().colorMode, set: (v) => up((c) => { c.colorMode = v; }) })),

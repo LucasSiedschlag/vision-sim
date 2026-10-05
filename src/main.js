@@ -312,7 +312,14 @@ function start(saved) {
     } else {
       els.metrics.querySelector('[data-m="day"]')?.remove();
     }
-    metric('wb', 'Balanço de branco', last.wb.map((g) => g.toFixed(2)).join(' / '), '', 'ganhos R / G / B');
+    if (last.awbKelvin) {
+      // diferença em mired (1e6/K): é a escala em que o olho e a câmera percebem desvio de cor
+      const off = Math.abs(1e6 / last.awbKelvin - 1e6 / lm.kelvin);
+      metric('wb', 'Balanço de branco', `automático: ${Math.round(last.awbKelvin / 50) * 50} K`, off > 30 ? 'warn' : 'ok',
+        off > 30 ? `as cores da cena enganaram o automático (luz real ~${Math.round(lm.kelvin / 50) * 50} K): fixe o balanço` : `ganhos ${last.wb.map((g) => g.toFixed(2)).join(' / ')}`);
+    } else {
+      metric('wb', 'Balanço de branco', last.wb.map((g) => g.toFixed(2)).join(' / '), '', 'ganhos R / G / B');
+    }
 
     const v = last.verdict, r = last.result;
     els.verdict.dataset.state = v.ok ? 'ok' : 'bad';
