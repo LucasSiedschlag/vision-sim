@@ -193,6 +193,19 @@ button, input, select { font: inherit; color: inherit; }
 .cmp-row[data-state="warn"] b { color: var(--warn); }
 .cmp-row[data-state="bad"] b { color: var(--bad); }
 .cmp-card .btn { justify-self: start; margin-top: 4px; }
+.val-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.val-lux { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); }
+.val-lux input { width: 110px; }
+.val-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
+.val-grid figure { margin: 0; display: grid; gap: 4px; }
+.val-grid figcaption { font: 500 12px var(--font-mono); color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.val-grid canvas { width: 100%; height: auto; border-radius: 4px; background: var(--cam-bg); }
+.val-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.val-table th, .val-table td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+.val-table th { color: var(--muted); font-weight: 500; }
+.val-table td:not(:first-child) { font: 500 13px var(--font-mono); }
+.val-table tr[data-state="ok"] td:last-child { color: var(--ok); }
+.val-table tr[data-state="bad"] td:last-child { color: var(--bad); }
 
 .metrics { margin: 0; display: grid; gap: 0; border: 1px solid var(--line); border-radius: var(--r); background: var(--panel); }
 .metric { padding: 8px 12px; border-bottom: 1px solid var(--line); border-left: 3px solid transparent; }

@@ -3,11 +3,13 @@
 import { createStore, normalizeScene, loadSaved, autosave } from './state.js';
 import { exampleScene } from './presets/objects.js';
 import { buildPanel } from './ui/panels.js';
-import { saveFile, readFileAsText } from './ui/io.js';
+import { saveFile, readFileAsText, readImage } from './ui/io.js';
 import { drawTopView, drawFrontView, topToWorld, topViewport, frontViewport, lockViews, sceneFixtures } from './render/views.js';
 import { renderCamera } from './render/camera.js';
 import { setAssetListener } from './render/textures.js';
-import { opticsMetrics, lightingMetrics, resolveHeights, drawOrder, resolveCamera, applyBoxVariant, boxInView } from './core/scene.js';
+import { opticsMetrics, lightingMetrics, resolveHeights, drawOrder, resolveCamera, applyBoxVariant, boxInView, detectionParams } from './core/scene.js';
+import { colorLut } from './core/detection.js';
+import { analyzePhoto, compareAnalyses } from './core/validation.js';
 import { projectImage, rectCorners, DEG } from './core/optics.js';
 import { shutterLabel } from './core/lighting.js';
 
@@ -160,6 +162,7 @@ function start(saved) {
     els.camTitle.textContent = `${W} × ${H} px`;
     paintLoupe();
     updateCameraReadout();
+    if (!vEl.dlg.hidden) runValidation();
   }
 
   function defaultLoupePoint() {
@@ -297,9 +300,13 @@ function start(saved) {
     metric('exposure', 'Exposição', `${shutterLabel(ex.shutter)} · ${ex.gainDb.toFixed(0)} dB`,
       clip > 0.02 ? 'bad' : ex.gainDb > 18 ? 'warn' : 'ok',
       clip > 0.002 ? `${(clip * 100).toFixed(1)}% da imagem estourada` : ex.gainDb > 18 ? 'ganho alto, mais ruído' : 'sem áreas estouradas');
-    metric('noise', 'Ruído no cinza médio', `SNR ${ex.snrDb.toFixed(0)} dB`,
-      ex.snrDb < 20 ? 'bad' : ex.snrDb < 30 ? 'warn' : 'ok',
-      `${Math.round(ex.meanE).toLocaleString('pt-BR')} e⁻ por pixel${ex.snrDb < 20 ? ' · granulado visível' : ''}`);
+    if (ex.meanE < 1 || !Number.isFinite(ex.snrDb)) {
+      metric('noise', 'Ruído no cinza médio', 'sem luz', 'bad', 'nenhuma luz chega ao sensor');
+    } else {
+      metric('noise', 'Ruído no cinza médio', `SNR ${ex.snrDb.toFixed(0)} dB`,
+        ex.snrDb < 20 ? 'bad' : ex.snrDb < 30 ? 'warn' : 'ok',
+        `${Math.round(ex.meanE).toLocaleString('pt-BR')} e⁻ por pixel${ex.snrDb < 20 ? ' · granulado visível' : ''}`);
+    }
     metric('flicker', 'Variação entre fotos', `±${(lm.flickerSpread * 50).toFixed(0)}%`,
       lm.flickerSpread > 0.1 ? 'bad' : lm.flickerSpread > 0.03 ? 'warn' : 'ok',
       lm.flickerSafe ? 'obturador em sincronia com a rede' : 'obturador fora de sincronia com 60 Hz');
@@ -608,6 +615,119 @@ function start(saved) {
   $('#compare-close').addEventListener('click', () => { els.compare.hidden = true; });
   els.compare.addEventListener('click', (e) => { if (e.target === els.compare) els.compare.hidden = true; });
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !els.compare.hidden) els.compare.hidden = true; });
+
+  /* ---------- Validação com foto real ---------- */
+  // A foto real é redimensionada para a resolução da câmera simulada e as duas imagens passam pela mesma
+  // análise (src/core/validation.js), medida em relação à fita achada em cada uma.
+  const vEl = {
+    dlg: $('#validate'), real: $('#validate-real'), sim: $('#validate-sim'), table: $('#validate-table'),
+    lux: $('#validate-lux'), save: $('#validate-save'), setup: $('#validate-setup'), file: $('#validate-file'),
+  };
+  let realPhoto = null, report = null; // realPhoto: { name, w, h, image }
+
+  function setupText() {
+    const sc = store.get().scene, c = sc.camera, ex = last.exposure;
+    const cam = resolveCamera(c), lm = lightingMetrics(sc, ex.shutter);
+    const wb = c.wbMode === 'auto' ? 'automático' : c.wbMode === 'manual-k' ? `${c.wbKelvin} K` : `manual ${c.wbGains.map((g) => g.toFixed(2)).join('/')}`;
+    return `Simulação: ${cam.model.name}, ${cam.w} × ${cam.h}, câmera a ${Math.round(c.z)} mm da bancada, obturador ${shutterLabel(ex.shutter)}, ganho ${ex.gainDb.toFixed(0)} dB, balanço ${wb}, ${Math.round(lm.lux)} lux calculados na fita. Ajuste a câmera real igual, com exposição manual.`;
+  }
+
+  function showImage(canvas, src, W, H, band) {
+    if (canvas.width !== W || canvas.height !== H) { canvas.width = W; canvas.height = H; }
+    const ctx = canvas.getContext('2d');
+    if (src instanceof ImageData) ctx.putImageData(src, 0, 0);
+    else { ctx.clearRect(0, 0, W, H); ctx.drawImage(src, 0, 0, W, H); }
+    if (band) {
+      ctx.strokeStyle = 'rgb(0,210,255)';
+      ctx.lineWidth = Math.max(2, W / 480);
+      ctx.strokeRect(band.x0, band.y0, band.x1 - band.x0, band.y1 - band.y0);
+    }
+  }
+
+  function runValidation() {
+    if (!last) return;
+    const sc = store.get().scene, W = last.width, H = last.height;
+    vEl.setup.textContent = setupText();
+    const lut = colorLut(detectionParams(sc.detection));
+    const simData = els.cam.getContext('2d').getImageData(0, 0, W, H);
+    const sim = analyzePhoto(simData.data, W, H, lut);
+    showImage(vEl.sim, simData, W, H, sim?.band);
+    report = null;
+    vEl.save.disabled = true;
+    vEl.table.hidden = true;
+    if (!realPhoto) return;
+    showImage(vEl.real, realPhoto.image, W, H, null);
+    const realData = vEl.real.getContext('2d').getImageData(0, 0, W, H);
+    const real = analyzePhoto(realData.data, W, H, lut);
+    if (real) showImage(vEl.real, realPhoto.image, W, H, real.band);
+    if (!real || !sim) {
+      notify(!real ? 'A fita não foi achada na foto real. Confira a cor procurada e a tolerância (aba Detecção).' : 'A fita não foi achada na simulação.', 'bad');
+      return;
+    }
+    const rows = compareAnalyses(real, sim);
+    const luxReal = Number(vEl.lux.value), luxSim = lightingMetrics(sc, last.exposure.shutter).lux;
+    if (luxReal > 0) {
+      const d = (luxSim - luxReal) / luxReal;
+      rows.unshift(['Luz na fita (lux)', String(Math.round(luxReal)), String(Math.round(luxSim)), `${(d * 100).toFixed(0)}%`, Math.abs(d) <= 0.15]);
+    }
+    vEl.table.querySelector('tbody').replaceChildren(...rows.map(([k, a, b, d, ok]) => {
+      const tr = document.createElement('tr');
+      tr.dataset.state = ok ? 'ok' : 'bad';
+      for (const t of [k, a, b, d]) { const td = document.createElement('td'); td.textContent = t; tr.append(td); }
+      return tr;
+    }));
+    vEl.table.hidden = false;
+    report = { rows, setup: vEl.setup.textContent, photo: realPhoto, camera: resolveCamera(sc.camera).model.name, W, H };
+    vEl.save.disabled = false;
+  }
+
+  $('#btn-validate').addEventListener('click', () => { vEl.dlg.hidden = false; $('#validate-close').focus(); runValidation(); });
+  $('#validate-close').addEventListener('click', () => { vEl.dlg.hidden = true; });
+  vEl.dlg.addEventListener('click', (e) => { if (e.target === vEl.dlg) vEl.dlg.hidden = true; });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !vEl.dlg.hidden) vEl.dlg.hidden = true; });
+  vEl.lux.addEventListener('change', runValidation);
+  vEl.file.addEventListener('change', async () => {
+    const f = vEl.file.files?.[0];
+    if (!f || !last) return;
+    try {
+      const img = await readImage(f, 12000);
+      const image = new Image();
+      await new Promise((res, rej) => { image.onload = res; image.onerror = rej; image.src = img.dataUrl; });
+      realPhoto = { name: f.name, w: img.width, h: img.height, image };
+      const aspect = img.width / img.height, simAspect = last.width / last.height;
+      if (Math.abs(aspect / simAspect - 1) > 0.01) notify(`A foto (${img.width} × ${img.height}) tem outra proporção que a câmera simulada (${last.width} × ${last.height}): confira a resolução da câmera real.`, 'bad');
+      else if (img.width !== last.width) notify(`Foto redimensionada de ${img.width} × ${img.height} para ${last.width} × ${last.height}.`);
+      runValidation();
+    } catch {
+      notify('Não foi possível abrir a foto.', 'bad');
+    }
+    vEl.file.value = '';
+  });
+  vEl.save.addEventListener('click', async () => {
+    if (!report) return;
+    const date = new Date().toISOString().slice(0, 10);
+    const md = [
+      `# Validação: ${report.camera} · ${date}`,
+      '',
+      `Foto real: ${report.photo.name} (${report.photo.w} × ${report.photo.h}, analisada em ${report.W} × ${report.H}).`,
+      '',
+      report.setup,
+      '',
+      '| Medida | Real | Simulado | Diferença | Dentro do limite |',
+      '|---|---|---|---|---|',
+      ...report.rows.map(([k, a, b, d, ok]) => `| ${k} | ${a} | ${b} | ${d} | ${ok ? 'sim' : 'não'} |`),
+      '',
+      'Limites: largura ±5%, matiz ±8°, saturação ±10 pontos, brilho ±15%, ruído ±50%, fita reconhecida ±10 pontos, reflexo ±5 pontos, lux ±15%.',
+      'Medidas feitas em relação à fita achada em cada imagem (src/core/validation.js).',
+      '',
+    ].join('\n');
+    try {
+      const res = await saveFile(`validacao-${store.get().scene.camera.modelId}-${date}.md`, md);
+      if (res === 'saved') notify('Relatório de validação salvo.');
+    } catch (e) {
+      notify(`Não foi possível salvar: ${e.message}`, 'bad');
+    }
+  });
 
   /* ---------- Topo: arquivos ---------- */
   $('#btn-example').addEventListener('click', () => {

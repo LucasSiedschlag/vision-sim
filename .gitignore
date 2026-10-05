@@ -1,3 +1,6 @@
 node_modules/
 dist/_wrapped.html
 .DS_Store
+calibracao/.venv/
+calibracao/fotos/
+calibracao/saida/

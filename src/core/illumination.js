@@ -16,17 +16,30 @@ const GRID = 16; // a iluminância varia devagar: calculada a cada 16 px e inter
  */
 export function computeLightFields({ cam, W, H, objs, sources }) {
   const N = W * H;
+  const cx = W / 2, cy = H / 2;
   const tops = objs.filter((o) => o.z1 < cam.z - 5).map((o) => {
     const s = surfaceOf(o);
     const r = (o.rot * Math.PI) / 180;
-    return { z: o.z1, x: o.x, y: o.y, hw: o.w / 2, hd: o.d / 2, c: Math.cos(r), s: Math.sin(r), f0: s.f0, rough: s.roughness };
+    const t = { z: o.z1, x: o.x, y: o.y, hw: o.w / 2, hd: o.d / 2, c: Math.cos(r), s: Math.sin(r), f0: s.f0, rough: s.roughness, hull: null };
+    // volumes: contorno na imagem (topo + base); o que estiver dentro dele e fora do topo é parede
+    if (o.kind === 'box' && o.h > 2 && cam.z - o.z0 > 1) {
+      const pts = [];
+      for (const z of [o.z0, o.z1]) {
+        for (const [a, b] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
+          const wx = o.x + a * t.hw * t.c - b * t.hd * t.s, wy = o.y + a * t.hw * t.s + b * t.hd * t.c;
+          pts.push([cx + ((wx - cam.x) * cam.fpx) / (cam.z - z), cy + ((wy - cam.y) * cam.fpx) / (cam.z - z)]);
+        }
+      }
+      t.hull = convexHull(pts);
+    }
+    return t;
   }).reverse(); // o de cima primeiro
   const heights = [0, ...new Set(tops.map((t) => t.z))];
   const layerOf = tops.map((t) => heights.indexOf(t.z));
 
-  // Qual superfície cada pixel vê (-1 = bancada)
+  // Qual superfície cada pixel vê (-1 = bancada) e se é a parede de um volume
   const hit = new Int16Array(N).fill(-1);
-  const cx = W / 2, cy = H / 2;
+  const wall = new Uint8Array(N);
   for (let v = 0, j = 0; v < H; v++) {
     for (let u = 0; u < W; u++, j++) {
       const du = (u + 0.5 - cx) / cam.fpx, dv = (v + 0.5 - cy) / cam.fpx;
@@ -35,6 +48,7 @@ export function computeLightFields({ cam, W, H, objs, sources }) {
         const dx = cam.x + du * depth - t.x, dy = cam.y + dv * depth - t.y;
         const lx = dx * t.c + dy * t.s, ly = -dx * t.s + dy * t.c;
         if (lx >= -t.hw && lx <= t.hw && ly >= -t.hd && ly <= t.hd) { hit[j] = k; break; }
+        if (t.hull && insideConvex(t.hull, u + 0.5, v + 0.5)) { hit[j] = k; wall[j] = 1; break; }
       }
     }
   }
@@ -78,8 +92,9 @@ export function computeLightFields({ cam, W, H, objs, sources }) {
     for (let v = 0, j = 0; v < H; v++) {
       for (let u = 0; u < W; u++, j++) {
         const k = hit[j];
+        // parede: usa a luz do topo do volume (aproximação; parede vertical recebe luz de lado) e não reflete
         field[j] = sample(grids[k < 0 ? 0 : layerOf[k]], u, v) / ref;
-        if (k < 0) continue;
+        if (k < 0 || wall[j]) continue;
         const t = tops[k];
         if (!t.f0) continue;
         // ponto visto, direção da câmera até ele e direção refletida (normal para cima)
@@ -101,7 +116,7 @@ export function computeLightFields({ cam, W, H, objs, sources }) {
     for (let v = 0, j = 0; v < H; v++) {
       for (let u = 0; u < W; u++, j++) {
         const k = hit[j];
-        if (k < 0 || !tops[k].f0) continue;
+        if (k < 0 || wall[j] || !tops[k].f0) continue;
         const depth = cam.z - tops[k].z;
         const du = (u + 0.5 - cx) / cam.fpx * depth, dv = (v + 0.5 - cy) / cam.fpx * depth;
         ambientHot[j] = schlick(tops[k].f0, depth / Math.hypot(du, dv, depth));
@@ -110,4 +125,29 @@ export function computeLightFields({ cam, W, H, objs, sources }) {
     for (const o of out) if (o.ambient) o.hot = ambientHot;
   }
   return out;
+}
+
+/** Envoltória convexa (cadeia monótona), em sentido anti-horário. */
+function convexHull(pts) {
+  const p = pts.slice().sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  const cross = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+  const lower = [], upper = [];
+  for (const q of p) {
+    while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], q) <= 0) lower.pop();
+    lower.push(q);
+  }
+  for (let i = p.length - 1; i >= 0; i--) {
+    const q = p[i];
+    while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], q) <= 0) upper.pop();
+    upper.push(q);
+  }
+  return lower.slice(0, -1).concat(upper.slice(0, -1));
+}
+
+function insideConvex(h, x, y) {
+  for (let i = 0; i < h.length; i++) {
+    const a = h[i], b = h[(i + 1) % h.length];
+    if ((b[0] - a[0]) * (y - a[1]) - (b[1] - a[1]) * (x - a[0]) < 0) return false;
+  }
+  return true;
 }

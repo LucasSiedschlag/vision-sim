@@ -57,6 +57,7 @@
           <span class="legend"><i class="lg-hit"></i>contorno da fita detectada <i class="lg-fp"></i>fora da fita <i class="lg-miss"></i>não reconhecido</span>
           <label class="tgl"><input type="checkbox" id="tgl-mask"> máscara</label>
           <button type="button" class="btn btn-quiet btn-sm" id="btn-shoot">Nova foto</button>
+          <button type="button" class="btn btn-quiet btn-sm" id="btn-validate">Foto real…</button>
         </div>
       </header>
       <div class="cam-wrap">
@@ -100,6 +101,30 @@
       <button type="button" class="btn" id="compare-close">Fechar</button>
     </header>
     <div class="compare-grid" id="compare-grid"></div>
+  </div>
+</div>
+
+<div class="compare" id="validate" hidden role="dialog" aria-modal="true" aria-labelledby="validate-title">
+  <div class="compare-panel">
+    <header>
+      <div><h2 id="validate-title">Validação com foto real</h2><small id="validate-sub">Mesma câmera, posição, luz e exposição manual da simulação. Compara as duas imagens com as mesmas medidas.</small></div>
+      <button type="button" class="btn" id="validate-close">Fechar</button>
+    </header>
+    <div class="val-controls">
+      <label class="btn btn-primary" for="validate-file">Abrir foto real…</label>
+      <input type="file" id="validate-file" accept="image/png,image/jpeg,image/webp" class="visually-hidden">
+      <label class="val-lux">Lux medido na fita <input type="number" id="validate-lux" min="0" max="200000" step="1" inputmode="decimal" placeholder="luxímetro"></label>
+      <button type="button" class="btn" id="validate-save" disabled>Salvar relatório</button>
+    </div>
+    <p class="hint" id="validate-setup"></p>
+    <div class="val-grid">
+      <figure><figcaption>Foto real</figcaption><canvas id="validate-real"></canvas></figure>
+      <figure><figcaption>Simulação</figcaption><canvas id="validate-sim"></canvas></figure>
+    </div>
+    <table class="val-table" id="validate-table" hidden>
+      <thead><tr><th>Medida</th><th>Real</th><th>Simulado</th><th>Diferença</th></tr></thead>
+      <tbody></tbody>
+    </table>
   </div>
 </div>
 

@@ -27,6 +27,10 @@ calcula e onde ela simplifica a realidade.
 - A imagem ideal (perspectiva sem distorção) é renderizada maior que a entregue, para cobrir os cantos
   que o barril puxa para dentro (até 2,5× os pixels; acima disso, em escala menor).
 - Distorção desligada = correção da própria câmera (LDC): mesma escala no centro, bordas cortadas.
+- Lente calibrada (`calibracao/calibrar.py`): o OpenCV mede focal e distorção (k1, k2, p1, p2, k3); o
+  script ajusta o k1 do modelo de divisão do centro aos cantos e o FOV que reproduz a focal medida no
+  centro. O modelo de um termo erra até alguns pixels nos cantos extremos de lentes muito abertas
+  (~11 px no teste com 81°); o erro fica gravado na calibração e aparece na aba Câmera.
 - "Caixa inteira na imagem" e a lupa usam a projeção com distorção. No modo logo, a emenda é percorrida
   na imagem ideal, onde ela é reta.
 - Profundidade de campo pela fórmula da hiperfocal, com círculo de confusão de 2 pixels do sensor e foco no
@@ -78,7 +82,10 @@ calcula e onde ela simplifica a realidade.
   da caixa, fita), e interpolada. Subir a luminária escurece; a luz cai para as bordas sozinha.
 - Placa difusora leitosa: quem emite passa a ser a placa (luminária + 100 mm de cada lado, 50 mm abaixo),
   Lambertiana, com 70% do fluxo (transmissão estimada).
-- Domo: superfície interna de luminância uniforme `L = Φ / (π · área)`.
+- Domo: superfície interna de luminância uniforme `L = Φ / (π · área)`. A cúpula é opaca: a luz de dentro
+  só chega a pontos dentro dela ou, abaixo da borda, pelo vão entre a borda e a bancada.
+- Paredes das caixas: recebem a luz calculada para o topo da própria caixa (aproximação; uma parede
+  vertical recebe a luz de lado) e não refletem as luminárias.
 
 ## Reflexo especular
 

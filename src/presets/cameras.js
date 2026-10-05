@@ -119,3 +119,35 @@ export function customCamera(base = {}) {
 export function isZoom(cam) {
   return cam.hfov.length > 1;
 }
+
+const MEASURED = ['widthPx', 'heightPx', 'hfov', 'focalMm', 'distortionK'];
+
+/**
+ * Câmera personalizada a partir de uma calibração (calibracao/calibrar.py). Mantém do modelo de base o que
+ * a calibração não mede (abertura, sensor, preço) e troca resolução, FOV, focal e distorção pelos medidos.
+ * A calibração vale para uma posição de zoom: a câmera resultante tem lente fixa.
+ */
+export function calibratedCamera(base, cal) {
+  if (cal?.tipo !== 'calibracao-vision-sim' || !cal.simulador) {
+    throw new Error('O arquivo não é uma calibração do simulador (gere com calibracao/calibrar.py).');
+  }
+  const s = cal.simulador;
+  if (!(s.widthPx > 0 && s.heightPx > 0 && s.hfov?.[0] > 0 && Number.isFinite(s.distortionK))) {
+    throw new Error('Calibração incompleta: faltam resolução, FOV ou distorção.');
+  }
+  return {
+    ...base,
+    id: 'custom',
+    name: `${cal.camera || base.name} (calibrada)`,
+    widthPx: s.widthPx, heightPx: s.heightPx,
+    hfov: [s.hfov[0]],
+    focalMm: s.focalMm?.length ? [s.focalMm[0]] : [base.focalMm[0]],
+    distortionK: s.distortionK,
+    estimated: (base.estimated || []).filter((k) => !MEASURED.includes(k) && !(k === 'focalMm' && s.focalMm)),
+    notes: `Lente medida com tabuleiro em ${cal.data} (${cal.fotos?.length ?? '?'} fotos, erro de reprojeção ${cal.erro_reprojecao_px} px).`,
+    calibration: {
+      date: cal.data, photos: cal.fotos?.length ?? null, rmsPx: cal.erro_reprojecao_px,
+      modelErrorPx: s.erro_modelo_px, fovMeasured: cal.fov_medido_graus, centerOffsetPx: cal.centro_optico_desvio_px,
+    },
+  };
+}

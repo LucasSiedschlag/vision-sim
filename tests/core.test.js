@@ -380,3 +380,87 @@ test('balanço automático: sem nenhum cinza possível, usa a média presa à cu
   assert.equal(a.zoneUsed, false);
   assert.ok(a.kelvin >= 2500 && a.kelvin <= 10000);
 });
+
+test('domo: a cúpula é opaca — fora dela só chega o que escapa por baixo da borda', () => {
+  const lum = resolveLuminaire(makeFixture('dome'), { x: 0, y: 0, z: 1300 }); // Ø 900 mm, borda a 60 mm
+  const ems = emitters(lum);
+  const inside = illuminance(ems, 0, 0, 0), outside = illuminance(ems, 1000, 0, 0);
+  assert.ok(inside > 500 && outside < 0.01 * inside, `${inside} / ${outside}`);
+  assert.equal(illuminance(ems, 0, 0, 800), 0); // acima da cúpula, do lado de fora
+});
+
+import { computeLightFields } from '../src/core/illumination.js';
+
+test('parede de caixa vista de lado: não pega o reflexo da superfície de baixo', () => {
+  // câmera atrás da caixa (y = −400): a parede da frente (y = −150) aparece entre as linhas 180 e 200
+  const cam = { x: 0, y: -400, z: 1300, fpx: 150, w: 300, h: 300 };
+  const plate = { id: 'p', kind: 'box', x: 0, y: 0, w: 900, d: 900, h: 60, rot: 0, z0: 0, z1: 60, surface: 'metal', roughness: 0.2 };
+  const box = { id: 'b', kind: 'box', x: 0, y: 0, w: 300, d: 300, h: 500, rot: 0, z0: 60, z1: 560, surface: 'paper', roughness: 0.45 };
+  // painel onde cairia o espelho do prato visto naquele pixel: antes da correção, a parede brilhava como inox
+  const lum = { shape: 'rect', x: 0, y: 250, z: 1200, rot: 0, w: 600, d: 600, lumens: 3000, m: 1 };
+  const rowAt = (y, z) => 150 + ((y - cam.y) * cam.fpx) / (cam.z - z);
+  const v = Math.floor((rowAt(-150, 60) + rowAt(-150, 560)) / 2);
+  const [f] = computeLightFields({ cam, W: 300, H: 300, objs: [plate, box], sources: [{ group: 'bench', lux: 500, lum, ems: emitters(lum) }] });
+  assert.equal(f.hot[v * 300 + 150], 0);
+  assert.ok(f.field[v * 300 + 150] > 0);
+  // controle: no prato, fora da caixa, o reflexo do inox existe
+  const [g] = computeLightFields({ cam, W: 300, H: 300, objs: [plate], sources: [{ group: 'bench', lux: 500, lum, ems: emitters(lum) }] });
+  assert.ok(g.hot[v * 300 + 150] > 0.1, `${g.hot[v * 300 + 150]}`);
+});
+
+import { calibratedCamera } from '../src/presets/cameras.js';
+
+test('calibração importada: o simulador reproduz a focal medida no centro', () => {
+  // saída real de calibrar.py no autoteste (câmera virtual de 4 mm, fx = 1370 px)
+  const cal = { tipo: 'calibracao-vision-sim', camera: 'virtual', data: '2026-10-05', fotos: Array(15).fill('x'), erro_reprojecao_px: 0.109,
+    opencv: { fx: 1370.7, fy: 1370.6 }, fov_medido_graus: { horizontal: 81.42, vertical: 45.2 },
+    simulador: { widthPx: 1920, heightPx: 1080, hfov: [81.24], distortionK: -0.1834, focalMm: [4.002], erro_modelo_px: 10.87 } };
+  const base = CAMERAS.find((c) => c.id === 'ds2cd1027g2h-liu-4');
+  const cam = calibratedCamera(base, cal);
+  assert.equal(cam.aperture, base.aperture); // o que a calibração não mede vem da base
+  assert.ok(!cam.estimated.includes('hfov'));
+  const r = resolveCamera({ modelId: 'custom', custom: cam, zoom: 0, x: 0, y: 0, z: 1000, distortion: true });
+  near(r.fpx, 1370.65, 1370.65 * 0.003);
+  near(r.hfov, 81.24, 1e-6);
+  assert.throws(() => calibratedCamera(base, { tipo: 'outra coisa' }), /calibração/);
+});
+
+import { analyzePhoto, compareAnalyses } from '../src/core/validation.js';
+import { colorLut } from '../src/core/detection.js';
+
+function photo(W, H, vertical) {
+  const px = new Uint8ClampedArray(W * H * 4);
+  let s = 12345;
+  const rnd = () => { s = (s * 1103515245 + 12345) >>> 0; return (s >>> 16) / 65536; };
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const i = (y * W + x) * 4;
+      const [a, b] = vertical ? [x, y] : [y, x]; // a: através da fita, b: ao longo
+      let c = [184, 135, 90]; // papelão
+      if (a >= 130 && a < 170 && b >= 50 && b < 350) c = b >= 180 && b < 220 ? [255, 255, 255] : [208, 32, 42];
+      const nz = (rnd() - 0.5) * 6;
+      px[i] = c[0] + nz; px[i + 1] = c[1] + nz; px[i + 2] = c[2] + nz; px[i + 3] = 255;
+    }
+  }
+  return px;
+}
+
+test('validação: mede a largura, a cobertura e o reflexo da fita na própria imagem', () => {
+  const lut = colorLut({ hue: 356.6, hueTol: 18, sMin: 0.45, vMin: 0.2 });
+  for (const vertical of [false, true]) {
+    const [W, H] = vertical ? [300, 400] : [400, 300];
+    const r = analyzePhoto(photo(W, H, vertical), W, H, lut);
+    assert.equal(r.horizontal, !vertical);
+    near(r.tapeWidthPx, 40, 1);
+    near(r.glare, 40 / 300, 0.01);
+    near(r.coverage, 260 / 300, 0.02);
+    near(r.tapeHsv[0], 356.6, 2);
+    near(r.refRgb[0], 184, 2);
+    assert.ok(r.refNoise > 0.5 && r.refNoise < 4, `${r.refNoise}`);
+  }
+  const lut2 = colorLut({ hue: 356.6, hueTol: 18, sMin: 0.45, vMin: 0.2 });
+  const a = analyzePhoto(photo(400, 300, false), 400, 300, lut2);
+  const rows = compareAnalyses(a, a);
+  assert.ok(rows.every((r) => r[4]), 'a mesma imagem tem que bater com ela mesma');
+  assert.equal(analyzePhoto(new Uint8ClampedArray(400 * 300 * 4).fill(128), 400, 300, lut2), null);
+});

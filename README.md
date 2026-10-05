@@ -28,6 +28,7 @@ Sem dependências em tempo de execução. Os módulos ES precisam de um servidor
 npm start            # python3 -m http.server 8080 → http://localhost:8080
 npm test             # testes dos cálculos (node --test)
 npm run build        # dist/index.html: página única com CSS, JS e logo embutidos
+npm run tabuleiro    # calibracao/tabuleiro-a4.pdf para calibrar a lente
 ```
 
 `dist/index.html` não tem `<html>`/`<head>`/`<body>` de propósito: é o formato publicado como página
@@ -48,6 +49,7 @@ src/
     photometry.js       luminárias como emissores: iluminância, reflexo espelhado, Fresnel
     illumination.js     luz e reflexo por pixel, por superfície
     materials.js        superfícies: Fresnel e aspereza (fita BOPP, papelão, inox)
+    validation.js       medidas comparáveis entre foto real e simulada
     lighting.js         tipos de luz, dia, flicker, exposição
     detection.js        máscara por cor (com tabela de 32 768 cores), avaliação, veredito
     scene.js            empilhamento, câmera resolvida, indicadores
@@ -64,8 +66,21 @@ src/
     io.js               salvar/abrir arquivos e ler imagens
 tests/core.test.js
 scripts/build-artifact.mjs
+scripts/tabuleiro.mjs   gera o tabuleiro de calibração (PDF)
+calibracao/             calibração da lente com OpenCV (LEIA-ME.md)
 docs/modelo.md          as simplificações físicas, para saber o que o simulador NÃO representa
+docs/validacao.md       roteiro da validação com a câmera real e resultados
 ```
+
+## Calibrar a lente e validar contra a câmera real
+
+- `npm run tabuleiro` gera `calibracao/tabuleiro-a4.pdf`. Fotos do tabuleiro + `calibracao/calibrar.py`
+  (Python + OpenCV) medem focal, FOV e distorção; **Importar calibração…** (aba Câmera) aplica no
+  simulador. Passo a passo em `calibracao/LEIA-ME.md`; `calibracao/teste_sintetico.py` confere o script
+  com uma câmera virtual de lente conhecida.
+- **Foto real…** (sobre a imagem da câmera) compara uma foto da câmera de verdade com a simulação, com as
+  mesmas medidas (largura da fita, cor, brilho, ruído, reflexo, detecção, lux), e salva um relatório.
+  Roteiro da sessão e limites de aceitação em `docs/validacao.md`.
 
 ## Adicionar uma câmera
 

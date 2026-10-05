@@ -71,6 +71,7 @@ export function emitters(lum) {
   } else if (lum.shape === 'dome') {
     // superfície interna de luminância uniforme L, Lambertiana, voltada para o centro
     const L = domeLuminance(lum);
+    const shell = { x: lum.x, y: lum.y, z: lum.z, R: lum.R };
     const bands = 8, top = Math.asin(Math.min(1, lum.hole / lum.R)); // ângulo do furo, a partir do zênite
     const el0 = 0, el1 = Math.PI / 2 - top; // elevação a partir da borda
     const dEl = (el1 - el0) / bands;
@@ -82,7 +83,7 @@ export function emitters(lum) {
       for (let i = 0; i < n; i++) {
         const az = (i + 0.5) * dAz;
         const ux = Math.cos(el) * Math.cos(az), uy = Math.cos(el) * Math.sin(az), uz = Math.sin(el);
-        out.push({ x: lum.x + lum.R * ux, y: lum.y + lum.R * uy, z: lum.z + lum.R * uz, nx: -ux, ny: -uy, nz: -uz, I0: L * area, m: 1 });
+        out.push({ x: lum.x + lum.R * ux, y: lum.y + lum.R * uy, z: lum.z + lum.R * uz, nx: -ux, ny: -uy, nz: -uz, I0: L * area, m: 1, shell });
       }
     }
   }
@@ -93,6 +94,17 @@ export function emitters(lum) {
 export function domeLuminance(lum) {
   const area = 2 * Math.PI * lum.R * lum.R * MM2_TO_M2;
   return lum.lumens / (Math.PI * area);
+}
+
+/**
+ * A luz de um ponto da parte de dentro do domo chega ao ponto (x, y, z)? A cúpula é opaca: só chega a
+ * pontos dentro dela, ou abaixo da borda se o caminho passa pela abertura de baixo.
+ */
+function seesInside(e, d, x, y, z) {
+  if (z >= d.z) return (x - d.x) ** 2 + (y - d.y) ** 2 + (z - d.z) ** 2 <= d.R * d.R * 1.0001;
+  const t = (e.z - d.z) / (e.z - z); // onde o caminho cruza o plano da borda
+  const qx = e.x + t * (x - e.x) - d.x, qy = e.y + t * (y - e.y) - d.y;
+  return qx * qx + qy * qy <= d.R * d.R;
 }
 
 /** Iluminância (lux) numa superfície horizontal virada para cima no ponto (x, y, z). */
@@ -107,6 +119,7 @@ export function illuminance(ems, x, y, z) {
     // ângulo de emissão: entre a normal do emissor e a direção emissor → ponto
     const cosE = -(e.nx * sx + e.ny * sy + e.nz * sz) / d;
     if (cosE <= 0) continue;
+    if (e.shell && !seesInside(e, e.shell, x, y, z)) continue;
     E += (e.I0 * (e.m === 0 ? 1 : e.m === 1 ? cosE : Math.pow(cosE, e.m)) * cosR) / (d2 * MM2_TO_M2);
   }
   return E;

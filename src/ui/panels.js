@@ -2,12 +2,12 @@
 
 import { h, section, range, number, text, select, segmented, check, rgbColor, button } from './controls.js';
 import { OBJECT_PRESETS, makeObject, makeImageObject, newId } from '../presets/objects.js';
-import { CAMERAS, isZoom } from '../presets/cameras.js';
+import { CAMERAS, isZoom, calibratedCamera } from '../presets/cameras.js';
 import { SHUTTERS, shutterLabel, isFlickerSafe, FIXTURE_MODELS, makeFixture, DIFFUSER_TRANSMISSION, lightSources } from '../core/lighting.js';
 import { SURFACES, surfaceOf } from '../core/materials.js';
 import { hexToRgb, rgbToHex } from '../core/color.js';
 import { resolveHeights, cameraModel, resolveCamera, detectionMode, applyBoxVariant, mainBox, lightContext } from '../core/scene.js';
-import { readImage } from './io.js';
+import { readImage, readFileAsText } from './io.js';
 
 const fmtMm = (v) => `${Math.round(v)} mm`;
 const fmtPct = (v) => `${Math.round(v * 100)}%`;
@@ -232,7 +232,7 @@ function boxesSection(store, add) {
 
 /* ---------------- Câmera ---------------- */
 
-function cameraPanel({ store, add }) {
+function cameraPanel({ store, add, notify }) {
   const C = () => store.get().scene.camera;
   const up = (fn, structural = false) => store.update((st) => fn(st.scene.camera, st), { structural });
   const model = cameraModel(C());
@@ -258,6 +258,8 @@ function cameraPanel({ store, add }) {
     h('div', { class: 'card-row' }, h('span', { text: 'Pixel' }),
       h('b', { text: `satura com ${sn.satLuxS.toFixed(2).replace('.', ',')} lux·s · ${(sn.fullWellE / 1000).toFixed(1).replace('.', ',')} mil e⁻ · leitura ${sn.readNoiseE} e⁻` })),
     h('div', { class: 'card-row' }, h('span', { text: 'Preço' }), h('b', { text: `${brl(model.price)}${model.store ? ` · ${model.store}` : ''}` })),
+    model.calibration ? h('div', { class: 'card-row' }, h('span', { text: 'Calibração' }),
+      h('b', { text: `${model.calibration.date} · erro ${model.calibration.rmsPx} px · modelo até ${model.calibration.modelErrorPx} px` })) : null,
     h('p', { class: 'hint', text: model.notes }), est,
     h('p', { class: 'note', text: 'Sensibilidade e saturação do pixel: datasheet do Sony IMX327 (1/2.8", 2,9 µm). Capacidade e ruído de leitura: medidos no IMX290, de mesmo pixel. Outros sensores: estimados pelo tamanho do pixel.' }));
 
@@ -283,7 +285,8 @@ function cameraPanel({ store, add }) {
   return h('div', {},
     section('Modelo', null,
       add(select({ id: 'cam-model', label: 'Câmera', options: groups, get: () => C().modelId, set: (v) => up((c) => { c.modelId = v; }, true) })),
-      info),
+      info,
+      calibrationImport(store, notify)),
     custom,
     section('Posição e lente', 'A câmera aponta para baixo. Arraste-a também nas vistas.',
       cam.zoomable ? add(range({ id: 'cam-zoom', label: 'Zoom', min: 0, max: 1, step: 0.01, get: () => C().zoom, set: (v) => up((c) => { c.zoom = v; }),
@@ -315,6 +318,28 @@ function cameraPanel({ store, add }) {
       add(range({ id: 'cam-jpeg', label: 'Qualidade da compressão', min: 10, max: 100, step: 1, get: () => C().jpegQuality, set: (v) => up((c) => { c.jpegQuality = v; }),
         format: (v) => (v >= 100 ? 'sem compressão' : `JPEG ${v}`) })),
       add(check({ id: 'cam-noise', label: 'Simular ruído do sensor', get: () => C().noise, set: (v) => up((c) => { c.noise = v; }) }))));
+}
+
+/** Botão "Importar calibração…": troca a câmera por uma personalizada com a lente medida. */
+function calibrationImport(store, notify) {
+  const input = h('input', { type: 'file', id: 'cal-file', accept: '.json,application/json', class: 'visually-hidden' });
+  input.addEventListener('change', async () => {
+    const f = input.files?.[0];
+    if (!f) return;
+    try {
+      const cal = JSON.parse(await readFileAsText(f));
+      const base = cameraModel(store.get().scene.camera);
+      const cam = calibratedCamera(base.id === 'custom' ? base : { ...base }, cal);
+      store.update((st) => { st.scene.camera.modelId = 'custom'; st.scene.camera.custom = cam; st.scene.camera.zoom = 0; }, { structural: true });
+      notify(`Lente calibrada aplicada: FOV ${cam.hfov[0]}°, distorção ${cam.distortionK}.`);
+    } catch (e) {
+      notify(e instanceof SyntaxError ? 'O arquivo não é um JSON válido.' : e.message, 'bad');
+    }
+    input.value = '';
+  });
+  return h('div', { class: 'row-actions' }, input,
+    h('label', { for: 'cal-file', class: 'btn btn-quiet', text: 'Importar calibração…' }),
+    h('p', { class: 'hint', text: 'JSON gerado por calibracao/calibrar.py com fotos do tabuleiro. Usa a câmera atual como base (abertura, sensor).' }));
 }
 
 /* ---------------- Luz ---------------- */
@@ -355,13 +380,12 @@ function lightPanel({ store, add }) {
 
   // Luminárias da bancada
   const modelOpts = Object.entries(FIXTURE_MODELS).map(([k, m]) => ({ value: k, label: m.label }));
-  const ctx = lightContext(store.get().scene);
-  const benchLux = new Map(lightSources(L(), ctx).filter((s) => s.group === 'bench').map((s) => [s.id, s.lux]));
+  // iluminância no alvo, recalculada a cada mudança (arrastar a luz ou a câmera, mexer no fluxo)
+  const benchLux = () => new Map(lightSources(L(), lightContext(store.get().scene)).filter((s) => s.group === 'bench').map((s) => [s.id, s.lux]));
   const cards = L().fixtures.map((f, idx) => {
     const F = () => L().fixtures.find((x) => x.id === f.id) || f;
     const mut = (fn, structural = false) => up((l) => { const t = l.fixtures.find((x) => x.id === f.id); if (t) fn(t); }, structural);
     const model = FIXTURE_MODELS[f.model];
-    const lux = benchLux.get(f.id);
     const productLine = [model.product, `${model.lumens} lm`, model.price ? brl(model.price) : null, model.store].filter(Boolean).join(' · ');
     return h('div', { class: 'fixture' + (f.on ? '' : ' is-off') },
       h('div', { class: 'fixture-head' },
@@ -372,7 +396,12 @@ function lightPanel({ store, add }) {
       h('p', { class: 'hint', text: productLine }),
       h('p', { class: 'hint', text: model.hint }),
       model.estimated?.length ? h('p', { class: 'note', text: `Estimado: ${model.estimated.join(', ')}. Fonte: ${model.source}.` }) : h('p', { class: 'note', text: `Fonte: ${model.source}.` }),
-      f.on ? h('p', { class: 'note' }, h('strong', { text: `${Math.round(lux ?? 0)} lux no alvo` }), ' (calculado pela posição e pelo fluxo)') : null,
+      f.on ? (() => {
+        const v = h('strong');
+        const refresh = () => { v.textContent = `${Math.round(benchLux().get(f.id) ?? 0)} lux no alvo`; };
+        refresh();
+        return add({ el: h('p', { class: 'note' }, v, ' (calculado pela posição e pelo fluxo)'), refresh });
+      })() : null,
       model.alwaysDiffuse || model.fixedToCamera ? null : add(check({ id: `fx-diff-${idx}`,
         label: `Placa difusora leitosa embaixo (passa ${Math.round(DIFFUSER_TRANSMISSION * 100)}% da luz)`,
         hint: 'Aumenta a área que brilha: o reflexo fica maior e bem mais fraco.',
