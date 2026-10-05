@@ -117,6 +117,13 @@ calcula e onde ela simplifica a realidade.
   fotos quando o obturador não é múltiplo de 1/120 s: uma faixa clara e uma escura a cada 270 linhas
   (1080 linhas lidas em 1/30 s, 4 ciclos de 1/120 s). Conferido na imagem renderizada: período de 270
   linhas e ±5,7% com o galpão (15% de flicker) e o painel, sumindo em 1/120 s e 1/60 s.
+- Obturador global (coluna `obturador` do catálogo): todas as linhas expõem ao mesmo tempo, então não há
+  faixas; o brilho ainda varia de uma foto para outra. Rolling: o tempo de leitura do quadro vem de
+  `leitura_ms` ou de `fps_max` (padrão 1/30 s) e define o espaçamento das faixas.
+- O automático respeita os limites da câmera do catálogo (`obturador_min_s`, `obturador_max_s`,
+  `ganho_max_db`). Ajustes manuais fora deles, ou recursos que a câmera não tem (balanço manual, LDC,
+  anti-cintilação, disparo para luz pulsada, modo noite), são simulados mesmo assim e avisados.
+- Abertura de lente de zoom: interpolada na focal entre `abertura` e `abertura_tele`.
 - Anti-cintilação (aba Câmera, exposição automática): como nas câmeras IP, o automático só usa
   1/120, 1/60, 1/40 ou 1/30 s e completa com ganho. Some com as faixas, mas não deixa encurtar o
   obturador: com lente clara e luz forte a imagem estoura (ColorVu F1.0 com ~1300 lux: 99,9% estourada).

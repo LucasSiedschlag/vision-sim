@@ -2,15 +2,19 @@
 
 import { h, section, range, number, text, select, segmented, check, rgbColor, button } from './controls.js';
 import { OBJECT_PRESETS, makeObject, makeImageObject, newId } from '../presets/objects.js';
-import { CAMERAS, isZoom, calibratedCamera } from '../presets/cameras.js';
+import { CAMERAS, calibratedCamera, megapixels } from '../presets/cameras.js';
 import { SHUTTERS, shutterLabel, isFlickerSafe, FIXTURE_MODELS, makeFixture, DIFFUSER_TRANSMISSION, lightSources } from '../core/lighting.js';
 import { SURFACES, surfaceOf } from '../core/materials.js';
 import { hexToRgb, rgbToHex } from '../core/color.js';
-import { resolveHeights, cameraModel, resolveCamera, detectionMode, applyBoxVariant, mainBox, lightContext } from '../core/scene.js';
+import { resolveHeights, cameraModel, resolveCamera, detectionMode, applyBoxVariant, mainBox, lightContext, cameraWarnings } from '../core/scene.js';
 import { readImage, readFileAsText } from './io.js';
 
 const fmtMm = (v) => `${Math.round(v)} mm`;
 const fmtPct = (v) => `${Math.round(v * 100)}%`;
+/** Número no formato brasileiro, sem zeros sobrando: 2.8 → "2,8", 4 → "4". */
+/** Número f com uma casa sempre (F1,0; F1,6), como nos datasheets. */
+const fNum = (v) => Number(v).toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+const fmtNum = (v, digits = 1) => (v == null ? '—' : Number(v.toFixed(digits)).toLocaleString('pt-BR', { maximumFractionDigits: digits }));
 const brl = (v) => v == null ? '—' : v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
 /** Monta o painel da aba ativa. Retorna { el, refreshers }. */
@@ -238,30 +242,70 @@ function cameraPanel({ store, add, notify }) {
   const model = cameraModel(C());
   const cam = resolveCamera(C());
 
+  // lista agrupada por marca: nome · MP · lente
+  const LENS = { fixa: 'lente fixa', varifocal: 'varifocal', motorizada: 'motorizada' };
+  const brands = [...new Set(CAMERAS.map((c) => c.brand))].sort((a, b) => a.localeCompare(b, 'pt-BR'));
   const groups = [
-    { group: 'USB', options: CAMERAS.filter((c) => c.kind === 'usb').map((c) => ({ value: c.id, label: c.name })) },
-    { group: 'IP · lente fixa', options: CAMERAS.filter((c) => c.kind === 'ip' && !isZoom(c)).map((c) => ({ value: c.id, label: c.name })) },
-    { group: 'IP · zoom motorizado', options: CAMERAS.filter((c) => c.kind === 'ip' && isZoom(c)).map((c) => ({ value: c.id, label: c.name })) },
+    ...brands.map((b) => ({ group: b, options: CAMERAS.filter((c) => c.brand === b).map((c) => ({
+      value: c.id, label: `${c.name} · ${fmtNum(megapixels(c))} MP · ${LENS[c.lens] || c.lens}${c.shutterType === 'global' ? ' · obturador global' : ''}` })) })),
+    model.missing && C().modelId !== 'custom' ? { group: 'Fora do catálogo', options: [{ value: C().modelId, label: `${model.name} (dados salvos na cena)` }] } : null,
     { group: 'Outra', options: [{ value: 'custom', label: 'Câmera personalizada…' }] },
-  ];
+  ].filter(Boolean);
 
-  const est = model.estimated?.length
-    ? h('p', { class: 'note' }, h('strong', { text: 'Valores estimados: ' }), model.estimated.join(', '), '. Confira no datasheet.')
-    : null;
+  const row = (k, v) => (v == null || v === '' ? null : h('div', { class: 'card-row' }, h('span', { text: k }), h('b', { text: v })));
+  const yes = (v) => (v == null ? null : v ? 'sim' : 'não');
+  const range2 = (a, b, unit = '') => (b != null ? `${fmtNum(a)}–${fmtNum(b)}${unit}` : `${fmtNum(a)}${unit}`);
   const sn = cam.sensor;
-  const sensorText = `${model.sensorType > 0 ? `1/${model.sensorType}" · ` : ''}pixel ${sn.pixelUm.toFixed(2).replace('.', ',')} µm${model.sensorType > 0 ? '' : ' (pela lente)'}`;
+  const sensorText = [
+    model.sensorModel,
+    model.sensorType > 0 ? `1/${fmtNum(model.sensorType)}"` : null,
+    `pixel ${fmtNum(sn.pixelUm, 2)} µm${model.pixelUm > 0 || model.sensorType > 0 ? '' : ' (pela lente)'}`,
+    model.shutterType === 'global' ? 'obturador global' : 'obturador rolling',
+  ].filter(Boolean).join(' · ');
+  const caps = model.caps || {};
+  const WB = { auto: 'automático', 'manual-k': 'temperatura', 'manual-rgb': 'RGB' };
+  const DN = { ir: 'IR (P&B)', colorvu: 'ColorVu (LED branco)', não: 'não' };
+  const capsText = [
+    caps.manualExposure != null ? `exposição manual: ${yes(caps.manualExposure)}` : null,
+    caps.shutterMin != null || caps.shutterMax != null ? `obturador ${caps.shutterMin != null ? shutterLabel(caps.shutterMin) : '?'} a ${caps.shutterMax != null ? shutterLabel(caps.shutterMax) : '?'}` : null,
+    caps.gainMaxDb != null ? `ganho até ${fmtNum(caps.gainMaxDb)} dB` : null,
+    caps.wbModes ? `balanço: ${caps.wbModes.map((m) => WB[m]).join(', ')}` : null,
+    caps.antiFlicker != null ? `anti-cintilação: ${yes(caps.antiFlicker)}` : null,
+    caps.ldc != null ? `correção de distorção: ${yes(caps.ldc)}` : null,
+    caps.trigger != null ? `saída de disparo: ${yes(caps.trigger)}` : null,
+    caps.dayNight ? `dia/noite: ${DN[caps.dayNight]}` : null,
+    caps.fpsMax != null ? `${fmtNum(caps.fpsMax)} fps` : null,
+  ].filter(Boolean).join(' · ');
+  const inf = model.info || {};
+  const otherText = [inf.wdrDb != null ? `WDR ${fmtNum(inf.wdrDb)} dB` : null, inf.interface, inf.protection, inf.codec?.length ? inf.codec.join('/') : null].filter(Boolean).join(' · ');
+
+  // avisos de ajustes que a câmera real não tem (atualizam a cada mudança)
+  const warnBox = h('div', { class: 'note note-warn' });
+  const refreshWarn = () => {
+    const w = cameraWarnings(store.get().scene);
+    warnBox.hidden = !w.length;
+    warnBox.replaceChildren(h('strong', { text: 'Ajustes que esta câmera não tem (simulados mesmo assim): ' }), ...w.map((x) => h('div', { text: `• ${x.message}` })));
+  };
+  refreshWarn();
+
   const info = h('div', { class: 'card' },
-    h('div', { class: 'card-row' }, h('span', { text: 'Resolução' }), h('b', { text: `${model.widthPx} × ${model.heightPx}` })),
-    h('div', { class: 'card-row' }, h('span', { text: 'Lente' }), h('b', { text: model.focalMm.length > 1 ? `${model.focalMm[0]}–${model.focalMm[1]} mm` : `${model.focalMm[0]} mm` })),
-    h('div', { class: 'card-row' }, h('span', { text: 'Abertura' }), h('b', { text: `F${Number(model.aperture).toFixed(1)}` })),
-    h('div', { class: 'card-row' }, h('span', { text: 'Sensor' }), h('b', { text: sensorText })),
-    h('div', { class: 'card-row' }, h('span', { text: 'Pixel' }),
-      h('b', { text: `satura com ${sn.satLuxS.toFixed(2).replace('.', ',')} lux·s · ${(sn.fullWellE / 1000).toFixed(1).replace('.', ',')} mil e⁻ · leitura ${sn.readNoiseE} e⁻` })),
-    h('div', { class: 'card-row' }, h('span', { text: 'Preço' }), h('b', { text: `${brl(model.price)}${model.store ? ` · ${model.store}` : ''}` })),
-    model.calibration ? h('div', { class: 'card-row' }, h('span', { text: 'Calibração' }),
-      h('b', { text: `${model.calibration.date} · erro ${model.calibration.rmsPx} px · modelo até ${model.calibration.modelErrorPx} px` })) : null,
-    h('p', { class: 'hint', text: model.notes }), est,
-    h('p', { class: 'note', text: 'Sensibilidade e saturação do pixel: datasheet do Sony IMX327 (1/2.8", 2,9 µm). Capacidade e ruído de leitura: medidos no IMX290, de mesmo pixel. Outros sensores: estimados pelo tamanho do pixel.' }));
+    row('Resolução', `${model.widthPx} × ${model.heightPx} (${fmtNum(megapixels(model))} MP)`),
+    row('Tipo', [{ ip: 'IP', usb: 'USB', industrial: 'industrial' }[model.kind], model.line].filter(Boolean).join(' · ')),
+    row('Lente', `${LENS[model.lens] || ''} ${range2(model.focalMm[0], model.focalMm[1], ' mm')}${model.focus ? ` · foco ${model.focus}` : ''}`.trim()),
+    row('FOV horizontal', range2(model.hfov[0], model.hfov[1], '°')),
+    row('Abertura', `F${fNum(model.aperture)}${model.apertureTele ? `–F${fNum(model.apertureTele)}` : ''}`),
+    row('Sensor', sensorText),
+    row('Pixel', `satura com ${fmtNum(sn.satLuxS, 2)} lux·s · ${fmtNum(sn.fullWellE / 1000, 1)} mil e⁻ · leitura ${fmtNum(sn.readNoiseE)} e⁻`),
+    row('Recursos', capsText || 'não informados no catálogo'),
+    row('Outros', otherText),
+    model.calibration ? row('Calibração', `${model.calibration.date} · erro ${model.calibration.rmsPx} px · modelo até ${model.calibration.modelErrorPx} px`) : null,
+    model.sourceUrl ? h('div', { class: 'card-row' }, h('span', { text: 'Fonte' }),
+      h('b', {}, h('a', { href: model.sourceUrl, target: '_blank', rel: 'noopener', text: 'datasheet' }), model.checkedAt ? ` · ${model.checkedAt}` : '')) : row('Consultado em', model.checkedAt),
+    model.missing ? h('p', { class: 'note', text: 'Esta câmera não está mais em data/cameras.csv: usando os dados salvos com a cena.' }) : null,
+    model.notes ? h('p', { class: 'hint', text: model.notes }) : null,
+    model.estimated?.length ? h('p', { class: 'note' }, h('strong', { text: 'Valores estimados: ' }), model.estimated.join(', '), '. Confira no datasheet.') : null,
+    h('p', { class: 'note', text: 'Sensibilidade e saturação do pixel: datasheet do Sony IMX327 (1/2.8", 2,9 µm). Capacidade e ruído de leitura: medidos no IMX290, de mesmo pixel. Outros sensores: estimados pelo tamanho do pixel, a menos que o catálogo traga os valores medidos.' }),
+    add({ el: warnBox, refresh: refreshWarn }));
 
   const custom = C().modelId === 'custom' ? (() => {
     const cu = () => C().custom || (C().custom = {});

@@ -8,7 +8,8 @@
     "start": "python3 -m http.server 8080",
     "test": "node --test tests/*.test.js",
     "build": "node scripts/build-artifact.mjs",
-    "tabuleiro": "node scripts/tabuleiro.mjs"
+    "tabuleiro": "node scripts/tabuleiro.mjs",
+    "catalogo": "node scripts/catalogo.mjs"
   },
   "engines": {
     "node": ">=20"

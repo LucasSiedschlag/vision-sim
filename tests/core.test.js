@@ -7,7 +7,12 @@ import { flickerAverage, flickerRange, isFlickerSafe, ambientAt } from '../src/c
 import { colorMask, evaluate, verdict } from '../src/core/detection.js';
 import { resolveHeights, opticsMetrics, resolveCamera } from '../src/core/scene.js';
 import { exampleScene } from '../src/presets/objects.js';
-import { CAMERAS } from '../src/presets/cameras.js';
+import { readFileSync } from 'node:fs';
+import { CAMERAS, parseCameraCatalog, setCameraCatalog } from '../src/presets/cameras.js';
+
+// o catálogo de câmeras vem do CSV, como no site
+const CATALOG_CSV = readFileSync(new URL('../data/cameras.csv', import.meta.url), 'utf8');
+setCameraCatalog(parseCameraCatalog(CATALOG_CSV).cameras);
 
 const near = (a, b, tol) => assert.ok(Math.abs(a - b) <= tol, `${a} ≉ ${b} (±${tol})`);
 
@@ -418,7 +423,7 @@ test('calibração importada: o simulador reproduz a focal medida no centro', ()
   const base = CAMERAS.find((c) => c.id === 'ds2cd1027g2h-liu-4');
   const cam = calibratedCamera(base, cal);
   assert.equal(cam.aperture, base.aperture); // o que a calibração não mede vem da base
-  assert.ok(!cam.estimated.includes('hfov'));
+  assert.ok(!cam.estimated.includes('hfov_graus') && !cam.estimated.includes('distorcao'));
   const r = resolveCamera({ modelId: 'custom', custom: cam, zoom: 0, x: 0, y: 0, z: 1000, distortion: true });
   near(r.fpx, 1370.65, 1370.65 * 0.003);
   near(r.hfov, 81.24, 1e-6);
@@ -463,4 +468,121 @@ test('validação: mede a largura, a cobertura e o reflexo da fita na própria i
   const rows = compareAnalyses(a, a);
   assert.ok(rows.every((r) => r[4]), 'a mesma imagem tem que bater com ela mesma');
   assert.equal(analyzePhoto(new Uint8ClampedArray(400 * 300 * 4).fill(128), 400, 300, lut2), null);
+});
+
+/* ---------- catálogo de câmeras (data/cameras.csv) ---------- */
+
+import { parseCsv } from '../src/core/csv.js';
+import { COLUMNS, megapixels } from '../src/presets/cameras.js';
+import { cameraWarnings, withCameraSnapshot, cameraModel, lightingMetrics } from '../src/core/scene.js';
+
+/** CSV com o cabeçalho completo e as linhas dadas como objetos (colunas faltando ficam vazias). */
+function catalogCsv(rows, sep = ';') {
+  return [COLUMNS.join(sep), ...rows.map((r) => COLUMNS.map((c) => r[c] ?? '').join(sep))].join('\r\n');
+}
+const MIN = { id: 'teste', marca: 'Marca', modelo: 'M1', tipo: 'ip', largura_px: '1920', altura_px: '1080', lente: 'fixa', focal_mm: '4', hfov_graus: '80', abertura: '2' };
+
+test('CSV: separador ; ou , pelo cabeçalho, aspas, "" escapado, quebra de linha nas aspas, BOM e CRLF', () => {
+  const a = parseCsv('﻿a;b;c\r\n1;"x;y";"diz ""oi""\r\nem duas linhas"\r\n\r\n2;;\r\n');
+  assert.deepEqual(a.header, ['a', 'b', 'c']);
+  assert.equal(a.rows.length, 2);
+  assert.deepEqual(a.rows[0].values, ['1', 'x;y', 'diz "oi"\r\nem duas linhas']);
+  assert.equal(a.rows[1].line, 5); // a primeira linha de dados ocupa as linhas 2 e 3 do arquivo
+  assert.equal(parseCsv('a,b\n1,2').separator, ',');
+});
+
+test('catálogo: as 7 câmeras do CSV têm os mesmos valores do cameras.js antigo', () => {
+  const { cameras, errors } = parseCameraCatalog(CATALOG_CSV);
+  assert.deepEqual(errors, []);
+  assert.equal(cameras.length, 7);
+  const by = Object.fromEntries(cameras.map((c) => [c.id, c]));
+  assert.deepEqual([by.c920.hfov, by.c920.focalMm, by.c920.aperture, by.c920.distortionK, by.c920.sensorType], [[70.4], [3.67], 2, -0.05, null]);
+  assert.deepEqual([by['ds2cd1027g2h-liu-4'].aperture, by['ds2cd1027g2h-liu-4'].sensorType, by['ds2cd1027g2h-liu-4'].hfov], [1, 2.8, [85]]);
+  assert.deepEqual([by.vip3240dzg2.hfov, by.vip3240dzg2.focalMm, by.vip3240dzg2.lens], [[105, 33], [2.8, 12], 'motorizada']);
+  assert.deepEqual([by['ds2cd3666g2t-izs'].widthPx, by['ds2cd3666g2t-izs'].heightPx], [3200, 1800]);
+  assert.deepEqual([by['ds2cd2643g2-izs'].hfov, by['ds2cd2643g2-izs'].sensorType, by['ds2cd2643g2-izs'].info.wdrDb], [[105.4, 34.3], 3, 120]);
+  assert.deepEqual(by.vip3240dzg2.caps.wbModes, ['auto']);
+  assert.equal(megapixels(by['ds2cd2643g2-izs']), 4.1);
+  assert.ok(cameras.every((c) => c.estimated.includes('distorcao'))); // nenhuma distorção é medida ainda
+});
+
+test('catálogo: linha com erro sai com o número da linha e as outras continuam', () => {
+  const csv = catalogCsv([
+    MIN,
+    { ...MIN, id: 'sem-focal', focal_mm: '' },
+    { ...MIN, id: 'numero-ruim', hfov_graus: 'oitenta' },
+    { ...MIN, id: 'zoom-errado', lente: 'motorizada' },
+    { ...MIN, id: 'estimado-ruim', estimados: 'hfov' },
+    { ...MIN }, // id repetido
+    { ...MIN, id: 'ok-2', abertura: '1,6', obturador_min_s: '1/100000', obturador_max_s: '1/3', balanco: 'auto|manual-k', exposicao_manual: 'não' },
+  ]);
+  const { cameras, errors } = parseCameraCatalog(csv);
+  assert.deepEqual(cameras.map((c) => c.id), ['teste', 'ok-2']);
+  assert.deepEqual(errors.map((e) => e.line), [3, 4, 5, 6, 7]);
+  assert.match(errors[0].message, /focal_mm é obrigatório/);
+  assert.match(errors[1].message, /hfov_graus: "oitenta" não é um número/);
+  assert.match(errors[2].message, /motorizada precisa de focal_tele_mm/);
+  assert.match(errors[3].message, /estimados: colunas desconhecidas hfov/);
+  assert.match(errors[4].message, /id repetido/);
+  const ok = cameras[1];
+  assert.equal(ok.aperture, 1.6); // vírgula decimal (Excel em português)
+  near(ok.caps.shutterMin, 1e-5, 1e-12);
+  assert.equal(ok.caps.manualExposure, false);
+  // coluna faltando ou sobrando na linha
+  const bad = parseCameraCatalog(`${COLUMNS.join(';')}\nteste;Marca`);
+  assert.match(bad.errors[0].message, /2 colunas, o cabeçalho tem/);
+});
+
+test('catálogo: abertura muda com o zoom; pixel e sensor medidos substituem as estimativas', () => {
+  const [cam] = parseCameraCatalog(catalogCsv([{ ...MIN, lente: 'motorizada', focal_mm: '2,8', focal_tele_mm: '12', hfov_graus: '105', hfov_tele_graus: '34',
+    abertura: '1,6', abertura_tele: '2,7', pixel_um: '2,0', sensor_modelo: 'IMX464', capacidade_e: '9000' }])).cameras;
+  near(lensState(cam, 0).aperture, 1.6, 1e-9);
+  near(lensState(cam, 1).aperture, 2.7, 1e-9);
+  near(lensState(cam, 0.5).aperture, 2.15, 1e-9);
+  const s = sensorFor(cam, 6);
+  assert.equal(s.pixelUm, 2.0);
+  assert.equal(s.fullWellE, 9000);
+  assert.ok(!s.estimated.includes('fullWellE') && s.estimated.includes('readNoiseE'));
+  assert.match(s.label, /IMX464/);
+});
+
+test('catálogo: obturador global e leitura pelo fps', () => {
+  const [g, r] = parseCameraCatalog(catalogCsv([{ ...MIN, id: 'g', obturador: 'global' }, { ...MIN, id: 'r', fps_max: '60' }])).cameras;
+  assert.equal(g.shutterType, 'global');
+  near(r.readoutMs, 1000 / 60, 1e-9);
+  setCameraCatalog([...CAMERAS, g]);
+  const scene = exampleScene();
+  scene.camera.modelId = 'g';
+  assert.equal(lightingMetrics(scene, 1 / 1000).rollingShutter, false);
+  setCameraCatalog(parseCameraCatalog(CATALOG_CSV).cameras);
+});
+
+test('recursos da câmera: ajuste que ela não tem é permitido, mas avisado', () => {
+  const scene = exampleScene();
+  scene.camera.modelId = 'vip3240dzg2'; // balanço só automático
+  scene.camera.wbMode = 'manual-k';
+  assert.deepEqual(cameraWarnings(scene).map((w) => w.key), ['wb']);
+  scene.camera.wbMode = 'auto';
+  assert.deepEqual(cameraWarnings(scene), []);
+  scene.camera.modelId = 'c920'; // sem saída de disparo, sem LDC, sem modo noite
+  scene.light.fixtures[0].strobe = true;
+  scene.camera.distortion = false;
+  scene.camera.colorMode = 'bw';
+  assert.deepEqual(cameraWarnings(scene).map((w) => w.key).sort(), ['bw', 'ldc', 'strobe']);
+  // não informado no catálogo: sem aviso
+  scene.camera.modelId = 'ds2cd1021g0i';
+  scene.camera.colorMode = 'color';
+  assert.deepEqual(cameraWarnings(scene), []);
+});
+
+test('câmera que saiu do catálogo: a cena abre com a cópia salva', () => {
+  const scene = exampleScene();
+  scene.camera.modelId = 'c920';
+  const saved = JSON.parse(JSON.stringify(withCameraSnapshot(scene)));
+  setCameraCatalog(CAMERAS.filter((c) => c.id !== 'c920'));
+  const m = cameraModel(saved.camera);
+  assert.equal(m.missing, true);
+  assert.deepEqual([m.hfov, m.focalMm, m.name], [[70.4], [3.67], 'Logitech C920']);
+  near(resolveCamera(saved.camera).fpx, resolveCamera({ ...saved.camera, modelId: 'custom', custom: saved.camera.snapshot }).fpx, 1e-9);
+  setCameraCatalog(parseCameraCatalog(CATALOG_CSV).cameras);
 });

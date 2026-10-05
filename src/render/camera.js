@@ -252,19 +252,26 @@ export async function renderCamera(scene, captureSeed = 1) {
   // Exposição
   const c = scene.camera;
   let shutter = c.shutter, gainDb = c.gainDb;
+  // o automático respeita os limites da câmera (catálogo: obturador_min_s/max_s, ganho_max_db)
+  const caps = cam.model.caps || {};
+  const tMin = Math.max(1 / 10000, caps.shutterMin ?? 0), tMax = Math.min(1 / 30, caps.shutterMax ?? Infinity);
+  const gMax = Math.min(36, caps.gainMaxDb ?? 36);
   if (c.exposureMode === 'auto' && sources.length && c.antiFlicker) {
     // anti-cintilação (rede de 60 Hz): o obturador só pode ser múltiplo do período de 1/120 s, para cada
     // linha integrar ciclos inteiros das lâmpadas. Se 1/120 s ainda é luz demais, a imagem estoura.
-    shutter = [4, 3, 2, 1].map((k) => k / 120).find((t) => lumaAt(t) <= 0.18) ?? 1 / 120;
-    gainDb = Math.min(36, Math.max(0, 20 * Math.log10(0.18 / Math.max(lumaAt(shutter), 1e-6))));
+    const steps = [4, 3, 2, 1].map((k) => k / 120).filter((t) => t <= Math.max(tMax, 1 / 120));
+    shutter = steps.find((t) => lumaAt(t) <= 0.18) ?? 1 / 120;
+    gainDb = Math.min(gMax, Math.max(0, 20 * Math.log10(0.18 / Math.max(lumaAt(shutter), 1e-6))));
   } else if (c.exposureMode === 'auto' && sources.length) {
     // menor ganho possível: procura o obturador que deixa a média em 18%, depois completa com ganho
     gainDb = 0;
-    if (lumaAt(1 / 30) < 0.18) {
-      shutter = 1 / 30;
-      gainDb = Math.min(36, Math.max(0, 20 * Math.log10(0.18 / Math.max(lumaAt(1 / 30), 1e-6))));
+    if (lumaAt(tMax) < 0.18) {
+      shutter = tMax;
+      gainDb = Math.min(gMax, Math.max(0, 20 * Math.log10(0.18 / Math.max(lumaAt(tMax), 1e-6))));
+    } else if (lumaAt(tMin) > 0.18) {
+      shutter = tMin; // nem o obturador mais curto da câmera segura: estoura
     } else {
-      let lo = Math.log(1 / 10000), hi = Math.log(1 / 30);
+      let lo = Math.log(tMin), hi = Math.log(tMax);
       for (let k = 0; k < 30; k++) {
         const mid = (lo + hi) / 2;
         if (lumaAt(Math.exp(mid)) > 0.18) hi = mid; else lo = mid;
@@ -297,7 +304,8 @@ export async function renderCamera(scene, captureSeed = 1) {
   let seed = (captureSeed * 2654435761) >>> 0 || 1;
   const rnd = () => { seed ^= seed << 13; seed ^= seed >>> 17; seed ^= seed << 5; return (seed >>> 0) / 4294967296; };
   const phase = rnd() * Math.PI * 2;
-  const lineTime = 1 / 30 / H;
+  // obturador rolling: cada linha começa um pouco depois (leitura do quadro em readoutMs); global: todas juntas
+  const lineTime = cam.model.shutterType === 'global' ? 0 : (cam.model.readoutMs || 1000 / 30) / 1000 / H;
   const S = sources.length;
   // coeficiente por fonte e canal: iluminância de referência × exposição × cor da luz × balanço
   const kd = sources.map((src) => {

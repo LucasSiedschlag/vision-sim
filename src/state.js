@@ -2,6 +2,7 @@
 
 import { exampleScene } from './presets/objects.js';
 import { normalizeLight } from './core/lighting.js';
+import { withCameraSnapshot } from './core/scene.js';
 
 const STORAGE_KEY = 'vision-sim:scene:v1';
 
@@ -59,7 +60,7 @@ export function autosave(scene) {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(scene));
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(withCameraSnapshot(scene)));
     } catch {
       // Sem armazenamento (janela privada, cota cheia com imagens grandes): segue sem salvar.
     }

@@ -7,7 +7,8 @@ import { saveFile, readFileAsText, readImage } from './ui/io.js';
 import { drawTopView, drawFrontView, topToWorld, topViewport, frontViewport, lockViews, sceneFixtures } from './render/views.js';
 import { renderCamera } from './render/camera.js';
 import { setAssetListener } from './render/textures.js';
-import { opticsMetrics, lightingMetrics, resolveHeights, drawOrder, resolveCamera, applyBoxVariant, boxInView, detectionParams } from './core/scene.js';
+import { opticsMetrics, lightingMetrics, resolveHeights, drawOrder, resolveCamera, applyBoxVariant, boxInView, detectionParams, withCameraSnapshot, cameraModel, cameraWarnings } from './core/scene.js';
+import { loadCameraCatalog } from './presets/cameras.js';
 import { colorLut } from './core/detection.js';
 import { analyzePhoto, compareAnalyses } from './core/validation.js';
 import { projectImage, rectCorners, DEG } from './core/optics.js';
@@ -312,8 +313,9 @@ function start(saved) {
     metric('flicker', 'Variação entre fotos', `±${(lm.flickerSpread * 50).toFixed(0)}%`,
       lm.flickerSpread > 0.1 ? 'bad' : lm.flickerSpread > 0.03 ? 'warn' : 'ok',
       lm.flickerSafe ? 'obturador em sincronia com a rede'
-        : lm.flickerSpread > 0.03 ? 'faixas horizontais na imagem: obturador mais curto que o piscar das lâmpadas (1/120 s); ligue a anti-cintilação'
-          : 'obturador fora de sincronia com 60 Hz');
+        : !lm.rollingShutter ? 'obturador global: sem faixas, mas o brilho muda de uma foto para outra'
+          : lm.flickerSpread > 0.03 ? 'faixas horizontais na imagem: obturador mais curto que o piscar das lâmpadas (1/120 s); ligue a anti-cintilação'
+            : 'obturador fora de sincronia com 60 Hz');
     metric('light', 'Luz na cena', `${Math.round(lm.lux)} lux · ${Math.round(lm.kelvin)} K`, '',
       lm.ambientOn ? `bancada ${Math.round(lm.benchShare * 100)}% · galpão ${Math.round(lm.ambientShare * 100)}% da imagem` : 'só luzes da bancada');
     if (lm.ambientOn) {
@@ -323,6 +325,9 @@ function start(saved) {
     } else {
       els.metrics.querySelector('[data-m="day"]')?.remove();
     }
+    const warns = cameraWarnings(sc);
+    if (warns.length) metric('caps', 'Recursos da câmera', `${warns.length} ajuste(s) que ela não tem`, 'warn', warns.map((w) => w.message).join(' '));
+    else els.metrics.querySelector('[data-m="caps"]')?.remove();
     if (last.awbKelvin) {
       // diferença em mired (1e6/K): é a escala em que o olho e a câmera percebem desvio de cor
       const off = Math.abs(1e6 / last.awbKelvin - 1e6 / lm.kelvin);
@@ -743,7 +748,7 @@ function start(saved) {
     try {
       const sc = store.get().scene;
       const name = (sc.name || 'cena').replace(/[^\w\-]+/g, '-').toLowerCase();
-      const res = await saveFile(`${name}.json`, JSON.stringify(sc, null, 2));
+      const res = await saveFile(`${name}.json`, JSON.stringify(withCameraSnapshot(sc), null, 2));
       if (res === 'saved') notify('Cena salva.');
     } catch (e) {
       notify(`Não foi possível salvar: ${e.message}`, 'bad');
@@ -795,12 +800,32 @@ function start(saved) {
   new ResizeObserver(() => drawViews()).observe(document.querySelector('.stage'));
 
   rebuildPanel();
+  if (catalogErrors.length) notify(`Catálogo de câmeras: ${catalogErrors.length} linha(s) com erro, ignoradas (detalhes no console).`, 'bad');
+  if (cameraModel(store.get().scene.camera).missing) notify('A câmera desta cena não está mais no catálogo: usando os dados salvos com a cena.', 'bad');
   $('#tgl-mask').checked = store.get().scene.detection.showMask;
   els.sceneName.textContent = store.get().scene.name || '';
   drawViews();
   scheduleCamera(0);
 }
 
+// Catálogo de câmeras: embutido no build de página única (scripts/build-artifact.mjs) ou lido do site.
+const loadText = async (path) => {
+  const inline = globalThis.__VISION_FILES__?.[path];
+  if (inline != null) return inline;
+  const res = await fetch(path);
+  if (!res.ok) throw new Error(`${path}: ${res.status}`);
+  return res.text();
+};
+let catalogErrors = [];
+const boot = async (saved) => {
+  try {
+    catalogErrors = await loadCameraCatalog(loadText);
+  } catch (e) {
+    catalogErrors = [{ line: 0, message: e.message }];
+  }
+  for (const e of catalogErrors) console.warn(`data/cameras.csv, linha ${e.line}: ${e.message}`);
+  start(saved);
+};
 const hot = window.claude?.hot;
-if (hot?.ready) hot.ready(start);
-else start(hot?.data ?? null);
+if (hot?.ready) hot.ready(boot);
+else boot(hot?.data ?? null);

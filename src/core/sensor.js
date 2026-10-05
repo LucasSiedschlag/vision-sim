@@ -73,8 +73,16 @@ export function sensorFromPixel(pixelUm, label) {
  * senão, pelo pixel que a lente implica (largura do sensor tirada do par focal/FOV).
  */
 export function sensorFor(model, sensorWidthMm) {
-  if (model.sensorType > 0) return sensorFromFormat(model.sensorType, model.widthPx, model.heightPx);
-  return sensorFromPixel((sensorWidthMm / model.widthPx) * 1000);
+  let s;
+  if (model.pixelUm > 0) s = { ...sensorFromPixel(model.pixelUm), estimated: ['satLuxS', 'fullWellE', 'readNoiseE'] };
+  else if (model.sensorType > 0) s = sensorFromFormat(model.sensorType, model.widthPx, model.heightPx);
+  else s = sensorFromPixel((sensorWidthMm / model.widthPx) * 1000);
+  // valores medidos do sensor (catálogo: sat_lux_s, capacidade_e, ruido_leitura_e) substituem as estimativas
+  const o = model.sensorOverride || {};
+  const keys = Object.keys(o);
+  if (keys.length) s = { ...s, ...o, estimated: s.estimated.filter((k) => !keys.includes(k)) };
+  if (model.sensorModel) s = { ...s, label: `${model.sensorModel} (${s.label})` };
+  return s;
 }
 
 /**

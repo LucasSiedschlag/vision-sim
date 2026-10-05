@@ -15,7 +15,7 @@ adicionado a partir de uma foto com as medidas reais.
 | **Cena** | Objetos com medidas reais (mm): caixa, fita vermelha, fita branca com logo, fita transparente com logo (mais brilhante, sensível ao reflexo), prato da balança, operador, ou qualquer foto enviada. Empilhamento ("apoiado sobre"), posição, rotação, cor em RGB (na fita transparente, cor do logo), opacidade e superfície (filme BOPP, papelão, inox, tecido) com a aspereza do reflexo. |
 | **Caixas com câmera fixa** | Lista de tamanhos de caixa (P, M, G, GG e as que você criar). Trocar a caixa ajusta a fita e a posição (centralizada ou encostada no canto). "Comparar todas" gera a imagem de cada caixa com a mesma câmera e mostra se cabe inteira, quantos pixels a fita tem e se a detecção passa. |
 | **Enquadramento** | Vista de cima e vista de frente em escala, com o campo de visão no plano do alvo e na bancada, altura da câmera, faixa nítida (profundidade de campo) e quantos pixels a fita ocupa. |
-| **Câmera** | Modelos pesquisados (Logitech C920, Hikvision, Intelbras) com resolução, FOV, zoom motorizado e distorção. Câmera personalizada com dados do datasheet. |
+| **Câmera** | Catálogo em `data/cameras.csv` (Logitech C920, Hikvision, Intelbras): resolução, sensor, obturador rolling ou global, lente fixa/motorizada, abertura, distorção e o que cada câmera deixa configurar (ajustes que ela não tem são simulados com aviso). Câmera personalizada e lente calibrada. |
 | **Imagem** | Exposição automática ou manual (obturador e ganho), balanço de branco (automático, por temperatura ou ganhos R/G/B), preto e branco (modo noite), ruído e compressão JPEG. |
 | **Luz** | Fontes somadas na mesma imagem. *Luzes da bancada*: produtos baratos reais (lâmpada bulbo 9 W, barra LED 60 cm, painel 24 W, ring light USB, domo), com fluxo em lúmens do fabricante, posição e altura em mm (arraste nas vistas), placa difusora opcional (reflexo maior e mais fraco, perde ~30% da luz), cor e opção de LED pulsado sincronizado. A iluminância no alvo é calculada, e a vista de cima marca onde cai o reflexo de cada luminária. *Luz do galpão*: lâmpadas (com flicker), teto com difusor e janelas, variando ao longo do dia. *Cobertura da bancada* bloqueia parte do galpão. Indicadores mostram a participação de cada uma na imagem e quanto a imagem varia ao longo do dia. |
 | **Detecção** | Dois modos, escolhidos automaticamente pelo alvo. *Área de cor* (fita colorida): cobertura da fita e falsos positivos. *Logo repetido* (fita transparente ou branca com logo): percorre a emenda inteira da caixa e conta os logos; reprova se houver um trecho sem logo maior que o limite (fita curta, faltando ou emenda aberta). Régua da emenda no veredito, máscara sobre a imagem e lupa com zoom de 2× a 16× (clique para fixar o ponto). |
@@ -29,6 +29,7 @@ npm start            # python3 -m http.server 8080 → http://localhost:8080
 npm test             # testes dos cálculos (node --test)
 npm run build        # dist/index.html: página única com CSS, JS e logo embutidos
 npm run tabuleiro    # calibracao/tabuleiro-a4.pdf para calibrar a lente
+npm run catalogo     # confere data/cameras.csv
 ```
 
 `dist/index.html` não tem `<html>`/`<head>`/`<body>` de propósito: é o formato publicado como página
@@ -38,6 +39,7 @@ no claude.ai, que adiciona esse esqueleto. Para abrir localmente, use o `index.h
 
 ```
 index.html              página (marcadores head:/body: usados pelo build)
+data/cameras.csv        catálogo de câmeras (colunas em data/LEIA-ME.md)
 css/styles.css          tema claro/escuro por tokens
 src/
   main.js               liga estado, painéis, vistas e câmera
@@ -45,6 +47,7 @@ src/
   core/                 cálculo puro, sem DOM (testado em Node)
     optics.js           FOV, mm/pixel, projeção, profundidade de campo, distorção
     color.js            sRGB/linear, temperatura de cor, HSV, balanço de branco
+    csv.js              leitor de CSV (; ou ,, aspas)
     sensor.js           equação da câmera, saturação e ruído do pixel (dados do Sony IMX327)
     photometry.js       luminárias como emissores: iluminância, reflexo espelhado, Fresnel
     illumination.js     luz e reflexo por pixel, por superfície
@@ -54,7 +57,7 @@ src/
     detection.js        máscara por cor (com tabela de 32 768 cores), avaliação, veredito
     scene.js            empilhamento, câmera resolvida, indicadores
   presets/
-    cameras.js          câmeras pesquisadas (preços de 02/10/2026; campos estimados marcados)
+    cameras.js          lê e valida o catálogo (data/cameras.csv)
     objects.js          objetos prontos e cena de exemplo
   render/
     camera.js           pipeline da imagem simulada
@@ -84,9 +87,11 @@ docs/validacao.md       roteiro da validação com a câmera real e resultados
 
 ## Adicionar uma câmera
 
-Inclua um item em `src/presets/cameras.js`. `hfov` e `focalMm` com um valor = lente fixa; com dois =
-zoom motorizado `[grande angular, tele]`. Liste em `estimated` tudo que não veio do datasheet: a
-interface avisa.
+Edite `data/cameras.csv` (Excel/LibreOffice, separador `;`): uma linha por câmera e lente. Colunas, padrões
+e o que cada uma muda no simulador em `data/LEIA-ME.md`. Obrigatórias: `id`, `marca`, `modelo`, `tipo`,
+`largura_px`, `altura_px`, `lente`, `focal_mm`, `hfov_graus`, `abertura`. Liste em `estimados` o que não
+veio do datasheet. `npm run catalogo` confere o arquivo antes do commit; no GitHub Pages ele é lido direto
+do site (no build de página única, vai embutido).
 
 ## Cena em arquivo
 

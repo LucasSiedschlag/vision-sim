@@ -55,7 +55,9 @@ export function lensState(cam, zoom = 0) {
   // na tangente, que é o que escala com a focal.
   const tw = Math.tan((cam.hfov[0] * DEG) / 2), tt = Math.tan((cam.hfov[cam.hfov.length - 1] * DEG) / 2);
   const hfovSheet = cam.hfov.length > 1 ? (2 * Math.atan(1 / (1 / tw + (1 / tt - 1 / tw) * ((f - fWide) / (fTele - fWide || 1))))) / DEG : cam.hfov[0];
-  return { hfov: hfovSheet, focalMm: f, sensorW, pitchMm: pitch, k1, aperture: cam.aperture };
+  // abertura: muitas lentes de zoom fecham ao aproximar (F1.6 → F2.7); interpolada na focal
+  const aperture = cam.apertureTele && fTele > fWide ? cam.aperture + (cam.apertureTele - cam.aperture) * ((f - fWide) / (fTele - fWide)) : cam.aperture;
+  return { hfov: hfovSheet, focalMm: f, sensorW, pitchMm: pitch, k1, aperture };
 }
 
 /**

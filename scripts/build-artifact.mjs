@@ -1,6 +1,7 @@
 // Gera dist/index.html: uma página única (CSS, JS e logo embutidos), pronta para publicar
 // como página no claude.ai ou abrir em qualquer servidor estático.
 import { build } from 'esbuild';
+import { parseCameraCatalog } from '../src/presets/cameras.js';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 
 const root = new URL('../', import.meta.url);
@@ -32,11 +33,19 @@ let js = out.outputFiles[0].text.replace('"assets/logo-exemplo.png"', () => JSON
 if (js.includes('assets/logo-exemplo.png')) throw new Error('Caminho do logo não foi substituído no bundle.');
 js = js.replace(/<\/script/gi, () => '<\\/script');
 
+// Arquivos de dados que o site lê com fetch (catálogo de câmeras e calibrações citadas nele): na página
+// única não há de onde buscar, então vão embutidos em __VISION_FILES__.
+const files = { 'data/cameras.csv': await read('data/cameras.csv') };
+const catalog = parseCameraCatalog(files['data/cameras.csv']);
+if (catalog.errors.length) throw new Error(`data/cameras.csv: ${catalog.errors.map((e) => `linha ${e.line}: ${e.message}`).join('; ')}`);
+for (const c of catalog.cameras) if (c.calibrationPath) files[c.calibrationPath] = await read(c.calibrationPath);
+const filesJs = `globalThis.__VISION_FILES__ = ${JSON.stringify(files).replace(/<\/script/gi, '<\\/script')};`;
+
 const page = [
   // função de substituição: o código minificado pode conter "$'" ou "$&", que um texto de
   // substituição trataria como padrão especial e trocaria por pedaços do HTML
   head.replace(/<link rel="stylesheet" href="css\/styles\.css">/, () => `<style>\n${css}\n</style>`),
-  body.replace(/<script type="module" src="src\/main\.js"><\/script>/, () => `<script type="module">\n${js}\n</script>`),
+  body.replace(/<script type="module" src="src\/main\.js"><\/script>/, () => `<script>\n${filesJs}\n</script>\n<script type="module">\n${js}\n</script>`),
 ].join('\n');
 
 await mkdir(new URL('dist/', root), { recursive: true });

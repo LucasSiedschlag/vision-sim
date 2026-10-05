@@ -4,7 +4,7 @@ import { CAMERAS, customCamera, isZoom } from '../presets/cameras.js';
 import { lensState, lensProjection, projectImage, depthOfField, DEG } from './optics.js';
 import { hexToRgb, rgbToHsv } from './color.js';
 import { sensorFor } from './sensor.js';
-import { lightSources, lightMix, dayVariation, combinedFlicker, isFlickerSafe } from './lighting.js';
+import { lightSources, lightMix, dayVariation, combinedFlicker, isFlickerSafe, shutterLabel, normalizeLight } from './lighting.js';
 
 /** Altura da base de cada objeto, seguindo a cadeia "apoiar sobre". */
 export function resolveHeights(objects) {
@@ -36,9 +36,24 @@ export function drawOrder(resolved) {
     .map(({ o }) => o);
 }
 
+/**
+ * Modelo da câmera da cena. Se a câmera saiu do catálogo, usa a cópia salva com a cena (`snapshot`) e
+ * marca `missing`; sem cópia, cai na primeira do catálogo.
+ */
 export function cameraModel(sceneCam) {
   if (sceneCam.modelId === 'custom') return customCamera(sceneCam.custom || {});
-  return CAMERAS.find((c) => c.id === sceneCam.modelId) || CAMERAS[0];
+  const cam = CAMERAS.find((c) => c.id === sceneCam.modelId);
+  if (cam) return cam;
+  if (sceneCam.snapshot) return { ...customCamera(sceneCam.snapshot), id: sceneCam.modelId, missing: true };
+  return { ...(CAMERAS[0] || customCamera()), missing: true };
+}
+
+/** Cena para salvar: leva uma cópia dos dados da câmera, para abrir mesmo se ela sair do catálogo. */
+export function withCameraSnapshot(scene) {
+  const c = scene.camera;
+  if (c.modelId === 'custom') return scene;
+  const model = cameraModel(c);
+  return { ...scene, camera: { ...c, snapshot: model.missing ? c.snapshot ?? null : model } };
 }
 
 /**
@@ -144,6 +159,7 @@ export function lightingMetrics(scene, shutterUsed) {
   return {
     lux: eff.lux,
     kelvin: eff.kelvin,
+    rollingShutter: cameraModel(scene.camera).shutterType !== 'global',
     flickerSpread: flicker,
     flickerSafe: isFlickerSafe(shutterUsed) || src.every((s) => !s.flicker || s.flicker < 0.01),
     benchShare: mix.shares.bench || 0,
@@ -236,4 +252,45 @@ function rectCornersAt(o, z) {
     y: o.y + (a * o.w / 2) * s + (b * o.d / 2) * c,
     z,
   }));
+}
+
+/* ---------- Recursos da câmera ---------- */
+
+const WB_LABEL = { auto: 'automático', 'manual-k': 'temperatura', 'manual-rgb': 'manual RGB' };
+
+/**
+ * Ajustes da cena que a câmera real não tem, pelo catálogo (colunas de configuração). O simulador deixa
+ * usar ("e se?"), mas avisa. Campo vazio no catálogo = não informado: sem aviso.
+ * Retorna [{ key, message }].
+ */
+export function cameraWarnings(scene) {
+  const c = scene.camera, caps = cameraModel(c).caps || {};
+  const out = [];
+  const manual = c.exposureMode === 'manual';
+  if (manual && caps.manualExposure === false) out.push({ key: 'exposure', message: 'Esta câmera não tem exposição manual: na real, só automática.' });
+  if (manual && caps.shutterMin != null && c.shutter < caps.shutterMin * 0.999) {
+    out.push({ key: 'shutter', message: `Obturador ${shutterLabel(c.shutter)} é mais curto que o mínimo da câmera (${shutterLabel(caps.shutterMin)}).` });
+  }
+  if (manual && caps.shutterMax != null && c.shutter > caps.shutterMax * 1.001) {
+    out.push({ key: 'shutter', message: `Obturador ${shutterLabel(c.shutter)} é mais longo que o máximo da câmera (${shutterLabel(caps.shutterMax)}).` });
+  }
+  if (manual && caps.gainMaxDb != null && c.gainDb > caps.gainMaxDb) {
+    out.push({ key: 'gain', message: `Ganho de ${c.gainDb} dB passa do máximo da câmera (${caps.gainMaxDb} dB).` });
+  }
+  if (caps.wbModes && !caps.wbModes.includes(c.wbMode)) {
+    out.push({ key: 'wb', message: `Balanço "${WB_LABEL[c.wbMode]}" não existe nesta câmera (tem: ${caps.wbModes.map((m) => WB_LABEL[m]).join(', ')}).` });
+  }
+  if (c.exposureMode === 'auto' && c.antiFlicker && caps.antiFlicker === false) {
+    out.push({ key: 'antiflicker', message: 'Esta câmera não tem anti-cintilação: na real, as faixas das lâmpadas aparecem.' });
+  }
+  if (c.distortion === false && caps.ldc === false) {
+    out.push({ key: 'ldc', message: 'Esta câmera não corrige distorção (LDC): na real, a imagem sai distorcida.' });
+  }
+  if (normalizeLight(scene.light).fixtures.some((f) => f.on && f.strobe) && caps.trigger === false) {
+    out.push({ key: 'strobe', message: 'Luz pulsada sincronizada precisa de saída de disparo, que esta câmera não tem.' });
+  }
+  if (c.colorMode === 'bw' && caps.dayNight === 'não') {
+    out.push({ key: 'bw', message: 'Esta câmera não tem modo noite em preto e branco.' });
+  }
+  return out;
 }
